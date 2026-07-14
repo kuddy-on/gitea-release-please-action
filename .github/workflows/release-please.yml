@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Create release pull request or publish release
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-type: node

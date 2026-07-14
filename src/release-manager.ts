@@ -1,19 +1,28 @@
 import semver from 'semver';
 
-import { parseChanges, requiredBump } from './conventional.js';
+import { parseChanges } from './conventional.js';
+import { expandExtraFiles, updateExtraFile } from './extra-files.js';
 import { GiteaApiError, GiteaClient } from './gitea-client.js';
 import { buildPullRequestBody, hashContent, parseMarker } from './marker.js';
 import { generateReleaseMarkdown } from './markdown.js';
+import type { ReleaseHead } from './release-head.js';
+import { addPath, pathContains, ROOT_PROJECT_PATH } from './repository-path.js';
+import {
+  LifecycleLabels,
+  releaseBranchName,
+  verifyMarkerFiles,
+} from './release-state.js';
+import { calculateVersion } from './versioning.js';
 import type {
   ActionConfig,
-  ActionResult,
   ChangeFileOperation,
   Logger,
+  PrepareResult,
   PullRequest,
+  PullRequestOutput,
   ReleaseCandidate,
   ReleaseMarker,
   RepositoryCommit,
-  RepositoryLabel,
   RepositoryTag,
 } from './types.js';
 
@@ -22,25 +31,18 @@ export type ReleaseApi = Pick<
   | 'changeFiles'
   | 'createLabel'
   | 'createPullRequest'
-  | 'createRelease'
-  | 'createTag'
-  | 'deleteBranch'
   | 'editPullRequest'
   | 'getBranch'
   | 'getContent'
-  | 'getReleaseByTag'
   | 'getRepository'
-  | 'getTag'
   | 'getTextContent'
   | 'listCommits'
   | 'listLabels'
+  | 'listFiles'
   | 'listPullRequests'
   | 'listTags'
   | 'updatePullRequestBranch'
 >;
-
-const PENDING_LABEL = 'autorelease: pending';
-const TAGGED_LABEL = 'autorelease: tagged';
 
 interface CommitScan {
   commits: RepositoryCommit[];
@@ -48,65 +50,108 @@ interface CommitScan {
   targetHeadSha: string;
 }
 
-function releaseBranchName(targetBranch: string): string {
-  const safeTarget = targetBranch.replace(/[^A-Za-z0-9._-]+/g, '-');
-  return `gitea-release-please--branches--${safeTarget}`;
-}
-
 function versionFromTag(tagName: string, prefix: string): string | null {
   if (!tagName.startsWith(prefix)) return null;
   const candidate = tagName.slice(prefix.length);
   const parsed = semver.parse(candidate);
-  if (!parsed || parsed.prerelease.length > 0 || parsed.build.length > 0) return null;
+  if (!parsed) return null;
   return parsed.version;
 }
 
 function createMarker(
   config: ActionConfig,
   targetBranch: string,
+  targetHeadSha: string,
   candidate: ReleaseCandidate,
 ): ReleaseMarker {
-  return {
+  const marker: ReleaseMarker = {
     schema: 1,
+    path: config.path,
     version: candidate.version,
     tagName: candidate.tagName,
     targetBranch,
-    changelogPath: config.changelogPath,
-    releaseNotesPath: config.releaseNotesPath,
-    fileHashes: {
-      [config.changelogPath]: hashContent(candidate.changelog),
-      [config.releaseNotesPath]: hashContent(candidate.releaseNotes),
-    },
+    targetHeadSha,
+    releaseNotesPath: addPath(config.path, config.releaseNotesPath),
+    fileHashes: Object.fromEntries(
+      Object.entries(candidate.files).map(([path, content]) => [path, hashContent(content)]),
+    ),
   };
+  if (!config.skipChangelog) marker.changelogPath = addPath(config.path, config.changelogPath);
+  return marker;
+}
+
+function formatDate(date: Date, pattern: string): string {
+  const year = String(date.getUTCFullYear()).padStart(4, '0');
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return pattern
+    .replace(/%Y/g, year)
+    .replace(/%m/g, month)
+    .replace(/%d/g, day)
+    .replace(/%F/g, `${year}-${month}-${day}`);
+}
+
+function releaseTitle(pattern: string, targetBranch: string, version: string): string {
+  return pattern
+    .replaceAll('${scope}', `(${targetBranch})`)
+    .replaceAll('${component}', '')
+    .replaceAll('${version}', version)
+    .replaceAll('${branch?}', targetBranch);
+}
+
+function pullRequestOutput(
+  pullRequest: PullRequest,
+  files: string[],
+  labels: string[],
+): PullRequestOutput {
+  const output: PullRequestOutput = {
+    headBranchName: pullRequest.head.ref,
+    baseBranchName: pullRequest.base.ref,
+    number: pullRequest.number,
+    title: pullRequest.title,
+    body: pullRequest.body,
+    labels,
+    files,
+  };
+  if (pullRequest.merge_commit_sha) output.mergeCommitOid = pullRequest.merge_commit_sha;
+  if (pullRequest.head.sha) output.sha = pullRequest.head.sha;
+  return output;
 }
 
 export class ReleaseManager {
-  private labels: RepositoryLabel[] | null = null;
+  private readonly lifecycle: LifecycleLabels;
 
   constructor(
     private readonly client: ReleaseApi,
     private readonly config: ActionConfig,
     private readonly logger: Logger,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+    private readonly head: ReleaseHead = {
+      client: client as GiteaClient,
+      fullName: `${config.owner}/${config.repo}`,
+      owner: config.owner,
+      fork: false,
+    },
+  ) {
+    this.lifecycle = new LifecycleLabels(client, logger);
+  }
 
-  async run(): Promise<ActionResult> {
+  async run(): Promise<PrepareResult> {
     const repository = await this.client.getRepository();
     const targetBranch = this.config.targetBranch ?? repository.default_branch;
     if (!targetBranch) throw new Error('The repository has no default branch.');
 
-    const result: ActionResult = {
+    const result: PrepareResult = {
       prCreated: false,
       prUpdated: false,
-      releaseCreated: false,
     };
 
-    await this.finalizeMergedPullRequests(targetBranch, result);
-
     const scan = await this.scanCommits(targetBranch);
-    const changes = parseChanges(scan.commits);
-    const bump = requiredBump(changes);
-    if (!bump) {
+    const commits = await this.applyCommitOverrides(
+      scan.commits.filter((commit) => this.includeCommit(commit)),
+    );
+    const changes = parseChanges(commits, this.config.changelogSections);
+    if (changes.length === 0) {
       this.logger.info('No releasable Conventional Commits were found.');
       return result;
     }
@@ -114,33 +159,89 @@ export class ReleaseManager {
     const previousVersion = scan.previousTag
       ? versionFromTag(scan.previousTag.name, this.config.tagPrefix)
       : null;
-    const version = previousVersion
-      ? semver.inc(previousVersion, bump)
-      : this.config.initialVersion;
-    if (!version) throw new Error('Unable to calculate the next semantic version.');
+    const version = calculateVersion(previousVersion, changes, this.config);
 
     const tagName = `${this.config.tagPrefix}${version}`;
-    const existingChangelog = await this.client.getTextContent(
-      this.config.changelogPath,
+    const changelogPath = addPath(this.config.path, this.config.changelogPath);
+    const releaseNotesPath = addPath(this.config.path, this.config.releaseNotesPath);
+    const versionFile = addPath(this.config.path, this.config.versionFile);
+    const existingChangelog = this.config.skipChangelog
+      ? null
+      : await this.client.getTextContent(changelogPath, targetBranch);
+    const currentVersionFile = await this.client.getTextContent(
+      versionFile,
       targetBranch,
     );
+    if (currentVersionFile === null) {
+      throw new Error(
+        `Simple release version file ${versionFile} does not exist on ${targetBranch}.`,
+      );
+    }
+    const now = this.now();
+    const date = formatDate(now, '%Y-%m-%d');
+    const extraFileDate = formatDate(now, this.config.dateFormat);
     const markdown = generateReleaseMarkdown({
       version,
       tagName,
-      date: this.now().toISOString().slice(0, 10),
+      date,
       changes,
-      webUrl: this.config.webUrl,
+      webUrl: this.config.changelogHost,
       owner: this.config.owner,
       repo: this.config.repo,
+      changelogSections: this.config.changelogSections,
+      includeCommitAuthors: this.config.includeCommitAuthors,
       ...(existingChangelog === null ? {} : { existingChangelog }),
       ...(scan.previousTag ? { previousTag: scan.previousTag.name } : {}),
     });
+    const files: Record<string, string> = {
+      [releaseNotesPath]: markdown.releaseNotes,
+      [versionFile]: `${version}\n`,
+    };
+    if (!this.config.skipChangelog) files[changelogPath] = markdown.changelog;
+    const repositoryExtraFiles = this.config.extraFiles.map((file) => ({
+      ...file,
+      path: addPath(this.config.path, file.path),
+    }));
+    const repositoryFiles = this.config.extraFiles.some((file) => file.glob)
+      ? await this.client.listFiles(targetBranch)
+      : [];
+    const configuredExtraFiles = expandExtraFiles(repositoryExtraFiles, repositoryFiles);
+    const reservedPaths = new Set([
+      changelogPath,
+      releaseNotesPath,
+      versionFile,
+    ]);
+    const reservedMatch = configuredExtraFiles.find((file) => reservedPaths.has(file.path));
+    if (reservedMatch) {
+      throw new Error(`extra-files path ${reservedMatch.path} conflicts with a release file.`);
+    }
+    const extraFiles = await Promise.all(
+      configuredExtraFiles.map(async (extraFile) => {
+        const content = await this.client.getTextContent(extraFile.path, targetBranch);
+        if (content === null) {
+          throw new Error(`Configured extra file ${extraFile.path} does not exist on ${targetBranch}.`);
+        }
+        return [
+          extraFile.path,
+          updateExtraFile(
+            extraFile,
+            content,
+            version,
+            extraFileDate,
+            this.config.dateFormat,
+          ),
+        ] as const;
+      }),
+    );
+    for (const [path, content] of extraFiles) files[path] = content;
+
     const candidate: ReleaseCandidate = {
       version,
       tagName,
       changes,
       changelog: markdown.changelog,
       releaseNotes: markdown.releaseNotes,
+      files,
       ...(scan.previousTag ? { previousTag: scan.previousTag.name } : {}),
     };
 
@@ -148,9 +249,47 @@ export class ReleaseManager {
     return result;
   }
 
+  private async applyCommitOverrides(
+    commits: RepositoryCommit[],
+  ): Promise<RepositoryCommit[]> {
+    const closedPullRequests = await this.client.listPullRequests('closed');
+    const overrides = new Map<string, string>();
+    for (const pullRequest of closedPullRequests) {
+      if (!pullRequest.merged || !pullRequest.merge_commit_sha) continue;
+      const match = (pullRequest.body ?? '').match(
+        /(?:^|\n)BEGIN_COMMIT_OVERRIDE\s*\r?\n([\s\S]*?)\r?\nEND_COMMIT_OVERRIDE(?:\n|$)/,
+      );
+      const override = match?.[1]?.trim();
+      if (override) overrides.set(pullRequest.merge_commit_sha, override);
+    }
+    return commits.map((commit) => {
+      const override = overrides.get(commit.sha);
+      if (!override || commit.parents.length > 1) return commit;
+      this.logger.info(`Using merged PR commit override for ${commit.sha.slice(0, 7)}.`);
+      return { ...commit, commit: { ...commit.commit, message: override } };
+    });
+  }
+
+  private includeCommit(commit: RepositoryCommit): boolean {
+    if (commit.files === undefined) return this.config.path === ROOT_PROJECT_PATH;
+    const relevantFiles = commit.files.filter((file) =>
+      pathContains(this.config.path, file.filename),
+    );
+    if (relevantFiles.length === 0) return false;
+    if (this.config.excludePaths.length === 0) return true;
+    return !relevantFiles.every((file) =>
+      this.config.excludePaths.some(
+        (path) => file.filename === path || file.filename.startsWith(`${path}/`),
+      ),
+    );
+  }
+
   private async scanCommits(targetBranch: string): Promise<CommitScan> {
     const [commits, tags] = await Promise.all([
-      this.client.listCommits(targetBranch),
+      this.client.listCommits(
+        targetBranch,
+        this.config.path !== ROOT_PROJECT_PATH || this.config.excludePaths.length > 0,
+      ),
       this.client.listTags(),
     ]);
     const targetHead = commits[0];
@@ -166,7 +305,8 @@ export class ReleaseManager {
 
     const selectedCommits: RepositoryCommit[] = [];
     let previousTag: RepositoryTag | undefined;
-    let foundBootstrap = !this.config.bootstrapSha;
+    const boundarySha = this.config.lastReleaseSha ?? this.config.bootstrapSha;
+    let foundBoundary = !boundarySha;
 
     for (const commit of commits) {
       const matchingTags = tagsByCommit.get(commit.sha);
@@ -179,16 +319,16 @@ export class ReleaseManager {
         break;
       }
 
-      if (this.config.bootstrapSha && commit.sha.startsWith(this.config.bootstrapSha)) {
-        foundBootstrap = true;
+      if (boundarySha && commit.sha.startsWith(boundarySha)) {
+        foundBoundary = true;
         break;
       }
       selectedCommits.push(commit);
     }
 
-    if (!foundBootstrap && !previousTag) {
+    if (!foundBoundary && !previousTag) {
       throw new Error(
-        `bootstrap-sha ${this.config.bootstrapSha} was not found on ${targetBranch}.`,
+        `commit boundary ${boundarySha} was not found on ${targetBranch}.`,
       );
     }
 
@@ -200,138 +340,58 @@ export class ReleaseManager {
     return scan;
   }
 
-  private async finalizeMergedPullRequests(
-    targetBranch: string,
-    result: ActionResult,
-  ): Promise<void> {
-    const [pullRequests, openPullRequests] = await Promise.all([
-      this.client.listPullRequests('closed'),
-      this.client.listPullRequests('open'),
-    ]);
-    const openHeads = new Set(openPullRequests.map((pullRequest) => pullRequest.head.ref));
-    const pending = pullRequests
-      .map((pullRequest) => ({ pullRequest, marker: parseMarker(pullRequest.body ?? '') }))
-      .filter(
-        (item): item is { pullRequest: PullRequest; marker: ReleaseMarker } =>
-          item.marker !== null &&
-          item.marker.targetBranch === targetBranch &&
-          item.pullRequest.merged,
-      );
-
-    for (const { pullRequest, marker } of pending) {
-      if (
-        !semver.valid(marker.version) ||
-        versionFromTag(marker.tagName, this.config.tagPrefix) !== marker.version
-      ) {
-        throw new Error(`Release PR #${pullRequest.number} has an invalid version marker.`);
-      }
-    }
-    pending.sort((left, right) => semver.compare(left.marker.version, right.marker.version));
-
-    for (const { pullRequest, marker } of pending) {
-      const mergeSha = pullRequest.merge_commit_sha;
-      if (!mergeSha) {
-        throw new Error(`Merged release PR #${pullRequest.number} has no merge commit SHA.`);
-      }
-
-      const [existingTag, existingRelease] = await Promise.all([
-        this.client.getTag(marker.tagName),
-        this.client.getReleaseByTag(marker.tagName),
-      ]);
-      if (existingTag && existingTag.commit.sha !== mergeSha) {
-        throw new Error(
-          `Tag ${marker.tagName} points to ${existingTag.commit.sha}, not release PR #${pullRequest.number} merge ${mergeSha}.`,
-        );
-      }
-      if (existingRelease) {
-        await this.setLifecycleLabel(pullRequest, TAGGED_LABEL);
-        continue;
-      }
-
-      const releaseNotes = await this.verifyMarkerFiles(marker, mergeSha, pullRequest.number);
-      if (!existingTag) {
-        this.logger.info(`Creating tag ${marker.tagName} at ${mergeSha}.`);
-        await this.client.createTag(marker.tagName, mergeSha);
-      }
-
-      this.logger.info(`Creating Gitea Release ${marker.tagName}.`);
-      const release = await this.client.createRelease({
-        tagName: marker.tagName,
-        target: mergeSha,
-        body: releaseNotes,
-      });
-      await this.setLifecycleLabel(pullRequest, TAGGED_LABEL);
-
-      result.releaseCreated = true;
-      result.tagName = marker.tagName;
-      result.version = marker.version;
-      result.sha = mergeSha;
-      result.releaseUrl = release.html_url;
-      result.body = releaseNotes;
-    }
-
-    const latestMerged = pending.reduce<
-      { pullRequest: PullRequest; marker: ReleaseMarker } | undefined
-    >(
-      (latest, current) =>
-        !latest || current.pullRequest.number > latest.pullRequest.number ? current : latest,
-      undefined,
-    );
-    if (latestMerged) {
-      await this.cleanupReleaseBranch(
-        latestMerged.pullRequest,
-        latestMerged.marker,
-        openHeads,
-      );
-    }
-  }
-
-  private async cleanupReleaseBranch(
-    pullRequest: PullRequest,
-    marker: ReleaseMarker,
-    openHeads: Set<string>,
-  ): Promise<void> {
-    const expectedBranch = releaseBranchName(marker.targetBranch);
-    if (pullRequest.head.ref !== expectedBranch || openHeads.has(expectedBranch)) return;
-    if (!(await this.client.getBranch(expectedBranch))) return;
-    this.logger.info(`Deleting merged release branch ${expectedBranch}.`);
-    await this.client.deleteBranch(expectedBranch);
-  }
-
-  private async verifyMarkerFiles(
-    marker: ReleaseMarker,
-    ref: string,
-    pullRequestNumber: number,
-  ): Promise<string> {
-    let releaseNotes: string | null = null;
-    for (const [path, expectedHash] of Object.entries(marker.fileHashes)) {
-      const content = await this.client.getTextContent(path, ref);
-      if (content === null || hashContent(content) !== expectedHash) {
-        throw new Error(
-          `Generated file ${path} in release PR #${pullRequestNumber} was changed outside this action. Close the PR or restore the generated content before releasing.`,
-        );
-      }
-      if (path === marker.releaseNotesPath) releaseNotes = content;
-    }
-    if (releaseNotes === null) {
-      throw new Error(
-        `Release PR #${pullRequestNumber} marker does not contain ${marker.releaseNotesPath}.`,
-      );
-    }
-    return releaseNotes;
-  }
-
   private async syncReleasePullRequest(
     targetBranch: string,
     targetHeadSha: string,
     candidate: ReleaseCandidate,
-    result: ActionResult,
+    result: PrepareResult,
   ): Promise<void> {
+    const branch = releaseBranchName(targetBranch);
+    const repository = this.head.fullName;
+    const [closedPullRequests, tags] = await Promise.all([
+      this.client.listPullRequests('closed'),
+      this.client.listTags(),
+    ]);
+    const tagNames = new Set(tags.map((tag) => tag.name));
+    const untaggedMerged = closedPullRequests.find((pullRequest) => {
+      if (!pullRequest.merged) return false;
+      const marker = parseMarker(pullRequest.body ?? '');
+      if (!marker || marker.targetBranch !== targetBranch || tagNames.has(marker.tagName)) {
+        return false;
+      }
+      if ((marker.path ?? ROOT_PROJECT_PATH) !== this.config.path) return false;
+      if (this.config.skipLabeling) return true;
+      const names = new Set((pullRequest.labels ?? []).map((label) => label.name));
+      return this.config.labels.every((label) => names.has(label));
+    });
+    if (untaggedMerged) {
+      this.logger.warning(
+        `Release PR #${untaggedMerged.number} is merged but untagged; skipping release PR creation.`,
+      );
+      return;
+    }
     const pullRequests = await this.client.listPullRequests('open');
     const releasePullRequests = pullRequests.filter((pullRequest) => {
       const marker = parseMarker(pullRequest.body ?? '');
       return marker?.targetBranch === targetBranch;
     });
+    for (const pullRequest of releasePullRequests) {
+      const marker = parseMarker(pullRequest.body ?? '');
+      if ((marker?.path ?? ROOT_PROJECT_PATH) !== this.config.path) {
+        throw new Error(
+          `PR #${pullRequest.number} manages path ${marker?.path ?? ROOT_PROJECT_PATH}, not configured path ${this.config.path}. Close it before changing path.`,
+        );
+      }
+      if (
+        pullRequest.head.ref !== branch ||
+        pullRequest.base.ref !== targetBranch ||
+        pullRequest.head.repo?.full_name !== repository
+      ) {
+        throw new Error(
+          `PR #${pullRequest.number} has a release marker for ${targetBranch} but is not the managed ${branch} pull request from ${repository}.`,
+        );
+      }
+    }
     if (releasePullRequests.length > 1) {
       throw new Error(
         `Found multiple open release pull requests for ${targetBranch}: ${releasePullRequests
@@ -340,16 +400,28 @@ export class ReleaseManager {
       );
     }
 
-    const branch = releaseBranchName(targetBranch);
-    const title = `chore(${targetBranch}): release ${candidate.tagName}`;
-    const commitMessage = title;
-    const marker = createMarker(this.config, targetBranch, candidate);
-    const body = buildPullRequestBody(marker, candidate.releaseNotes);
+    const baseTitle = releaseTitle(
+      this.config.pullRequestTitlePattern,
+      targetBranch,
+      candidate.version,
+    );
+    const title = this.config.draftPullRequest ? `WIP: ${baseTitle}` : baseTitle;
+    const commitMessage = this.config.signoff
+      ? `${baseTitle}\n\nSigned-off-by: ${this.config.signoff}`
+      : baseTitle;
+    const marker = createMarker(this.config, targetBranch, targetHeadSha, candidate);
+    const body = buildPullRequestBody(
+      marker,
+      candidate.releaseNotes,
+      this.config.pullRequestHeader,
+      this.config.pullRequestFooter,
+    );
     const existingPullRequest = releasePullRequests[0];
 
     if (!existingPullRequest) {
       await this.createReleasePullRequest(
         targetBranch,
+        targetHeadSha,
         branch,
         title,
         body,
@@ -363,23 +435,71 @@ export class ReleaseManager {
     const previousMarker = parseMarker(existingPullRequest.body ?? '');
     if (!previousMarker) throw new Error('Internal error: release pull request marker disappeared.');
     if (
-      previousMarker.changelogPath !== this.config.changelogPath ||
-      previousMarker.releaseNotesPath !== this.config.releaseNotesPath
+      (previousMarker.path ?? ROOT_PROJECT_PATH) !== this.config.path ||
+      previousMarker.changelogPath !==
+        (this.config.skipChangelog
+          ? undefined
+          : addPath(this.config.path, this.config.changelogPath)) ||
+      previousMarker.releaseNotesPath !== addPath(this.config.path, this.config.releaseNotesPath)
     ) {
       throw new Error(
         `Release file paths changed while PR #${existingPullRequest.number} is open. Close it before changing action paths.`,
       );
     }
+    const previousFiles = Object.keys(previousMarker.fileHashes).sort();
+    const candidateFiles = Object.keys(candidate.files).sort();
+    if (JSON.stringify(previousFiles) !== JSON.stringify(candidateFiles)) {
+      throw new Error(
+        `Generated file set changed while PR #${existingPullRequest.number} is open. Close it before changing extra-files.`,
+      );
+    }
 
-    await this.verifyMarkerFiles(previousMarker, branch, existingPullRequest.number);
-    if (existingPullRequest.merge_base && existingPullRequest.merge_base !== targetHeadSha) {
-      this.logger.info(`Synchronizing release PR #${existingPullRequest.number} with ${targetBranch}.`);
+    await verifyMarkerFiles(
+      this.head.client,
+      previousMarker,
+      branch,
+      existingPullRequest.number,
+    );
+    const releaseOperations = await this.fileOperations(branch, candidate, this.head.client);
+    const baseChanged = previousMarker.targetHeadSha !== targetHeadSha;
+    const rebuildBranch = baseChanged || releaseOperations.length > 0;
+    if (rebuildBranch) {
+      const operations = await this.fileOperations(targetBranch, candidate);
+      if (operations.length === 0) {
+        throw new Error(
+          `Release PR #${existingPullRequest.number} has no generated diff from ${targetBranch}; close it before rerunning.`,
+        );
+      }
+      this.logger.info(
+        `Rebuilding release PR #${existingPullRequest.number} from ${targetBranch}.`,
+      );
       try {
-        await this.client.updatePullRequestBranch(existingPullRequest.number);
+        if (this.head.fork) {
+          this.logger.info(
+            `Rebasing fork release PR #${existingPullRequest.number} onto ${targetBranch}.`,
+          );
+          await this.client.updatePullRequestBranch(existingPullRequest.number, 'rebase');
+          const currentBranch = await this.head.client.getBranch(branch);
+          if (!currentBranch) throw new Error(`Fork release branch ${branch} disappeared.`);
+          await this.head.client.updateBranch(
+            branch,
+            targetHeadSha,
+            currentBranch.commit.id,
+          );
+          await this.head.client.changeFiles({ branch, message: commitMessage, files: operations });
+        } else {
+          await this.client.changeFiles({
+            branch: targetBranch,
+            newBranch: branch,
+            forcePush: true,
+            message: commitMessage,
+            files: operations,
+          });
+        }
       } catch (error) {
-        if (error instanceof GiteaApiError && error.status === 409) {
+        if (error instanceof GiteaApiError && error.status === 403) {
           throw new Error(
-            `Release PR #${existingPullRequest.number} conflicts with ${targetBranch}; resolve or close it before rerunning.`,
+            `Gitea rejected the force-push for release PR #${existingPullRequest.number}. Ensure ${branch} allows force pushes and the token has repository write permission.`,
             { cause: error },
           );
         }
@@ -387,91 +507,155 @@ export class ReleaseManager {
       }
     }
 
-    const operations = await this.fileOperations(branch, candidate);
-    if (operations.length > 0) {
-      this.logger.info(`Updating release PR #${existingPullRequest.number}.`);
-      await this.client.changeFiles({
-        branch,
-        message: commitMessage,
-        files: operations,
-      });
-    }
-
     const metadataChanged =
       existingPullRequest.title !== title || existingPullRequest.body !== body;
+    let outputPullRequest = existingPullRequest;
     if (metadataChanged) {
-      await this.client.editPullRequest(existingPullRequest.number, { title, body });
+      outputPullRequest = await this.client.editPullRequest(existingPullRequest.number, {
+        title,
+        body,
+      });
     }
-    if (operations.length > 0 || metadataChanged) {
-      await this.setLifecycleLabel(existingPullRequest, PENDING_LABEL);
+    if (rebuildBranch || metadataChanged || this.config.alwaysUpdate) {
+      if (!this.config.skipLabeling) {
+        await this.lifecycle.set(
+          outputPullRequest,
+          [...this.config.labels, ...this.config.extraLabels],
+          [...this.config.labels, ...this.config.releaseLabels],
+        );
+      }
       result.prUpdated = true;
       result.prNumber = existingPullRequest.number;
+      result.pullRequest = pullRequestOutput(
+        { ...outputPullRequest, title, body },
+        Object.keys(candidate.files),
+        [...this.config.labels, ...this.config.extraLabels],
+      );
     } else {
       this.logger.info(`Release PR #${existingPullRequest.number} is already up to date.`);
+      if (!this.config.skipLabeling) {
+        await this.lifecycle.set(
+          existingPullRequest,
+          [...this.config.labels, ...this.config.extraLabels],
+          [...this.config.labels, ...this.config.releaseLabels],
+        );
+      }
     }
   }
 
   private async createReleasePullRequest(
     targetBranch: string,
+    targetHeadSha: string,
     branch: string,
     title: string,
     body: string,
     commitMessage: string,
     candidate: ReleaseCandidate,
-    result: ActionResult,
+    result: PrepareResult,
   ): Promise<void> {
-    const existingBranch = await this.client.getBranch(branch);
+    const existingBranch = await this.head.client.getBranch(branch);
     if (existingBranch) {
-      const operations = await this.fileOperations(branch, candidate);
+      const operations = await this.fileOperations(branch, candidate, this.head.client);
       if (operations.length > 0 || existingBranch.commit.message.trim() !== commitMessage) {
         throw new Error(
           `Branch ${branch} exists without a managed release PR and contains unexpected content. Delete or rename it before rerunning.`,
         );
       }
       this.logger.info(`Recovering generated release branch ${branch}.`);
+      const rebuiltOperations = await this.fileOperations(targetBranch, candidate);
+      if (rebuiltOperations.length === 0) {
+        throw new Error(
+          `Release files already match ${targetBranch}; no pull request diff can be created.`,
+        );
+      }
+      try {
+        if (this.head.fork) {
+          await this.head.client.updateBranch(
+            branch,
+            targetHeadSha,
+            existingBranch.commit.id,
+          );
+          await this.head.client.changeFiles({
+            branch,
+            message: commitMessage,
+            files: rebuiltOperations,
+          });
+        } else {
+          await this.client.changeFiles({
+            branch: targetBranch,
+            newBranch: branch,
+            forcePush: true,
+            message: commitMessage,
+            files: rebuiltOperations,
+          });
+        }
+      } catch (error) {
+        if (error instanceof GiteaApiError && error.status === 403) {
+          throw new Error(
+            `Gitea rejected the force-push for recovered release branch ${branch}. Ensure it allows force pushes and the token has repository write permission.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
     } else {
       const operations = await this.fileOperations(targetBranch, candidate);
       if (operations.length === 0) {
         throw new Error('Release files already match the candidate; no pull request diff can be created.');
       }
       this.logger.info(`Creating release branch ${branch}.`);
-      await this.client.changeFiles({
-        branch: targetBranch,
-        newBranch: branch,
-        message: commitMessage,
-        files: operations,
-      });
+      if (this.head.fork) {
+        const target = await this.client.getBranch(targetBranch);
+        if (!target) throw new Error(`Target branch ${targetBranch} disappeared.`);
+        await this.head.client.createBranch(branch, target.commit.id);
+        await this.head.client.changeFiles({ branch, message: commitMessage, files: operations });
+      } else {
+        await this.client.changeFiles({
+          branch: targetBranch,
+          newBranch: branch,
+          message: commitMessage,
+          files: operations,
+        });
+      }
     }
 
     const pullRequest = await this.client.createPullRequest({
       title,
       body,
-      head: branch,
+      head: this.head.fork ? `${this.head.owner}:${branch}` : branch,
       base: targetBranch,
     });
-    await this.setLifecycleLabel(pullRequest, PENDING_LABEL);
+    if (!this.config.skipLabeling) {
+      await this.lifecycle.set(
+        pullRequest,
+        [...this.config.labels, ...this.config.extraLabels],
+        [...this.config.labels, ...this.config.releaseLabels],
+      );
+    }
     this.logger.info(`Created release PR #${pullRequest.number}: ${pullRequest.html_url}`);
     result.prCreated = true;
     result.prNumber = pullRequest.number;
+    result.pullRequest = pullRequestOutput(
+      pullRequest,
+      Object.keys(candidate.files),
+      [...this.config.labels, ...this.config.extraLabels],
+    );
   }
 
   private async fileOperations(
     ref: string,
     candidate: ReleaseCandidate,
+    client: Pick<GiteaClient, 'getContent' | 'getTextContent'> = this.client,
   ): Promise<ChangeFileOperation[]> {
-    const desiredFiles: Array<[string, string]> = [
-      [this.config.changelogPath, candidate.changelog],
-      [this.config.releaseNotesPath, candidate.releaseNotes],
-    ];
     const operations: ChangeFileOperation[] = [];
 
-    for (const [path, desiredContent] of desiredFiles) {
-      const metadata = await this.client.getContent(path, ref);
+    for (const [path, desiredContent] of Object.entries(candidate.files)) {
+      const metadata = await client.getContent(path, ref);
       if (!metadata) {
         operations.push({ operation: 'create', path, content: desiredContent });
         continue;
       }
-      const currentContent = await this.client.getTextContent(path, ref);
+      const currentContent = await client.getTextContent(path, ref);
       if (currentContent === desiredContent) continue;
       operations.push({
         operation: 'update',
@@ -483,45 +667,4 @@ export class ReleaseManager {
     return operations;
   }
 
-  private async setLifecycleLabel(
-    pullRequest: PullRequest,
-    lifecycle: typeof PENDING_LABEL | typeof TAGGED_LABEL,
-  ): Promise<void> {
-    try {
-      const pending = await this.ensureLabel(PENDING_LABEL, 'fbca04');
-      const tagged = await this.ensureLabel(TAGGED_LABEL, '0e8a16');
-      const managedIds = new Set([pending.id, tagged.id]);
-      const preservedIds = (pullRequest.labels ?? [])
-        .map((label) => label.id)
-        .filter((id) => !managedIds.has(id));
-      const lifecycleId = lifecycle === PENDING_LABEL ? pending.id : tagged.id;
-      await this.client.editPullRequest(pullRequest.number, {
-        labels: [...preservedIds, lifecycleId],
-      });
-    } catch (error) {
-      this.logger.warning(
-        `Unable to update lifecycle labels for PR #${pullRequest.number}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  private async ensureLabel(name: string, color: string): Promise<RepositoryLabel> {
-    this.labels ??= await this.client.listLabels();
-    const existing = this.labels.find((label) => label.name === name);
-    if (existing) return existing;
-
-    try {
-      const created = await this.client.createLabel(name, color);
-      this.labels.push(created);
-      return created;
-    } catch (error) {
-      if (!(error instanceof GiteaApiError) || error.status !== 409) throw error;
-      this.labels = await this.client.listLabels();
-      const raced = this.labels.find((label) => label.name === name);
-      if (!raced) throw error;
-      return raced;
-    }
-  }
 }

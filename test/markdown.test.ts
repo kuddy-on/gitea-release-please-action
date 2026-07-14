@@ -12,6 +12,11 @@ describe('release markdown', () => {
       webUrl: 'https://gitea.example',
       owner: 'acme',
       repo: 'demo',
+      changelogSections: [
+        { type: 'feat', section: 'Features' },
+        { type: 'fix', section: 'Bug Fixes' },
+      ],
+      includeCommitAuthors: false,
       existingChangelog: '# Changelog\n\n## 1.1.0\n\nOld notes\n',
       changes: [
         {
@@ -55,6 +60,8 @@ describe('release markdown', () => {
       webUrl: 'https://gitea.example/root',
       owner: 'acme',
       repo: 'demo',
+      changelogSections: [{ type: 'feat', section: 'Features' }],
+      includeCommitAuthors: false,
       changes: [
         {
           sha: '1234567',

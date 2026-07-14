@@ -46,4 +46,24 @@ describe('Conventional Commit parsing', () => {
   it('returns no bump when there are no releasable changes', () => {
     expect(requiredBump(parseChanges([commit('chore: tidy files')]))).toBeNull();
   });
+
+  it('honors custom sections, hidden types, Release-As, and commit authors', () => {
+    const custom = commit('docs: publish migration guide\n\nRelease-As: 2.0.0');
+    custom.author = { username: 'alice' };
+    const changes = parseChanges(
+      [custom, commit('chore: hidden maintenance')],
+      [
+        { type: 'docs', section: 'Documentation' },
+        { type: 'chore', section: 'Miscellaneous', hidden: true },
+      ],
+    );
+
+    expect(changes).toEqual([
+      expect.objectContaining({
+        type: 'docs',
+        releaseAs: '2.0.0',
+        author: 'alice',
+      }),
+    ]);
+  });
 });

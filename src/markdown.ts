@@ -1,4 +1,4 @@
-import type { ParsedChange } from './types.js';
+import type { ChangelogSection, ParsedChange } from './types.js';
 
 interface ReleaseMarkdownOptions {
   version: string;
@@ -10,32 +10,14 @@ interface ReleaseMarkdownOptions {
   owner: string;
   repo: string;
   existingChangelog?: string;
+  changelogSections: ChangelogSection[];
+  includeCommitAuthors: boolean;
 }
 
 interface GeneratedMarkdown {
   changelog: string;
   releaseNotes: string;
 }
-
-const GROUPS = [
-  { title: 'Breaking Changes', match: (change: ParsedChange) => change.breaking },
-  {
-    title: 'Features',
-    match: (change: ParsedChange) => !change.breaking && change.type === 'feat',
-  },
-  {
-    title: 'Bug Fixes',
-    match: (change: ParsedChange) => !change.breaking && change.type === 'fix',
-  },
-  {
-    title: 'Performance',
-    match: (change: ParsedChange) => !change.breaking && change.type === 'perf',
-  },
-  {
-    title: 'Dependencies',
-    match: (change: ParsedChange) => !change.breaking && change.type === 'deps',
-  },
-] as const;
 
 function escapeMarkdown(value: string): string {
   return value
@@ -44,23 +26,44 @@ function escapeMarkdown(value: string): string {
     .replace(/[\r\n]+/g, ' ');
 }
 
-function changeLine(change: ParsedChange): string {
+function changeLine(change: ParsedChange, includeCommitAuthors: boolean): string {
   const scope = change.scope ? `**${escapeMarkdown(change.scope)}:** ` : '';
-  const note =
-    change.breakingNotes.length > 0
-      ? ` — ${escapeMarkdown(change.breakingNotes.join('; '))}`
-      : '';
-  return `- ${scope}${escapeMarkdown(change.subject)}${note} ([${change.sha.slice(0, 7)}](${change.url}))`;
+  const author = includeCommitAuthors && change.author
+    ? ` (@${escapeMarkdown(change.author.replace(/^@/, ''))})`
+    : '';
+  return `* ${scope}${escapeMarkdown(change.subject)}${author} ([${change.sha.slice(0, 7)}](${change.url}))`;
 }
 
-function sections(changes: ParsedChange[]): string {
-  return GROUPS.map((group) => {
-    const matching = changes.filter(group.match);
+function sections(
+  changes: ParsedChange[],
+  changelogSections: ChangelogSection[],
+  includeCommitAuthors: boolean,
+): string {
+  const breaking = changes.filter(
+    (change) => change.breaking && change.breakingNotes.length > 0,
+  );
+  const breakingSection = breaking.length === 0
+    ? ''
+    : `### ⚠ BREAKING CHANGES\n\n${breaking
+        .flatMap((change) =>
+          change.breakingNotes.map(
+            (note) => `* ${escapeMarkdown(note)} ([${change.sha.slice(0, 7)}](${change.url}))`,
+          ),
+        )
+        .join('\n')}`;
+  const grouped = changelogSections.map((group) => {
+    if (group.hidden) return '';
+    const matching = changes.filter(
+      (change) => !change.hidden && change.type === group.type,
+    );
     if (matching.length === 0) return '';
-    return `### ${group.title}\n\n${matching.map(changeLine).join('\n')}`;
+    return `### ${group.section}\n\n${matching
+      .map((change) => changeLine(change, includeCommitAuthors))
+      .join('\n')}`;
   })
     .filter(Boolean)
     .join('\n\n');
+  return [breakingSection, grouped].filter(Boolean).join('\n\n');
 }
 
 function compareUrl(options: ReleaseMarkdownOptions): string {
@@ -84,13 +87,17 @@ function appendExisting(section: string, existing?: string): string {
 
 export function generateReleaseMarkdown(options: ReleaseMarkdownOptions): GeneratedMarkdown {
   const url = compareUrl(options);
-  const groupedChanges = sections(options.changes);
+  const groupedChanges = sections(
+    options.changes,
+    options.changelogSections,
+    options.includeCommitAuthors,
+  );
   const fullChangelog = `**Full Changelog**: [${
     options.previousTag ? `${options.previousTag}...${options.tagName}` : options.tagName
   }](${url})`;
 
-  const releaseNotes = `# ${options.tagName} (${options.date})\n\n${groupedChanges}\n\n${fullChangelog}\n`;
-  const changelogSection = `## [${options.version}](${url}) (${options.date})\n\n${groupedChanges}`;
+  const releaseNotes = `## [${options.version}](${url}) (${options.date})\n\n${groupedChanges}\n\n${fullChangelog}\n`;
+  const changelogSection = releaseNotes.trim();
 
   return {
     changelog: appendExisting(changelogSection, options.existingChangelog),

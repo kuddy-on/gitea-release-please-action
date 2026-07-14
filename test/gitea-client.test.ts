@@ -29,6 +29,7 @@ describe('GiteaClient', () => {
     const sha = await client.changeFiles({
       branch: 'main',
       newBranch: 'release/main',
+      forcePush: true,
       message: 'chore(main): release v0.1.0',
       files: [
         { operation: 'create', path: 'CHANGELOG.md', content: '# Changelog\n' },
@@ -45,9 +46,14 @@ describe('GiteaClient', () => {
     const body = JSON.parse(String(init.body)) as {
       branch: string;
       new_branch: string;
+      force_push: boolean;
       files: Array<{ content: string }>;
     };
-    expect(body).toMatchObject({ branch: 'main', new_branch: 'release/main' });
+    expect(body).toMatchObject({
+      branch: 'main',
+      new_branch: 'release/main',
+      force_push: true,
+    });
     expect(Buffer.from(body.files[0]?.content ?? '', 'base64').toString()).toBe(
       '# Changelog\n',
     );
@@ -95,5 +101,132 @@ describe('GiteaClient', () => {
     await expect(client.getReleaseByTag('v0.1.0')).resolves.toBeNull();
     const firstUrl = fetchMock.mock.calls[0]?.[0] as URL;
     expect(firstUrl.pathname).toContain('/contents/docs/RELEASE.md');
+  });
+
+  it('attaches an Undici dispatcher when proxy-server is configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+      'http://proxy.example:8080/',
+    );
+
+    await client.listTags();
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown };
+    expect(init.dispatcher).toBeDefined();
+  });
+
+  it('uses Gitea 1.27 fork and branch-update endpoints', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ login: 'release-bot' }))
+      .mockResolvedValueOnce(jsonResponse([{ full_name: 'release-bot/demo' }]))
+      .mockResolvedValueOnce(
+        jsonResponse({ name: 'release-please--branches--main', commit: { id: 'base' } }, 201),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+    );
+
+    await expect(client.getAuthenticatedUser()).resolves.toMatchObject({
+      login: 'release-bot',
+    });
+    await expect(client.listForks()).resolves.toHaveLength(1);
+    await client.createBranch('release-please--branches--main', 'upstream-sha');
+    await client.updateBranch(
+      'release-please--branches--main',
+      'new-upstream-sha',
+      'old-release-sha',
+    );
+    await client.updatePullRequestBranch(7, 'rebase');
+
+    const createBranchBody = JSON.parse(
+      String((fetchMock.mock.calls[2]?.[1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(createBranchBody).toEqual({
+      new_branch_name: 'release-please--branches--main',
+      old_ref_name: 'upstream-sha',
+    });
+    const updateBranchBody = JSON.parse(
+      String((fetchMock.mock.calls[3]?.[1] as RequestInit).body),
+    ) as Record<string, unknown>;
+    expect(updateBranchBody).toMatchObject({
+      new_commit_id: 'new-upstream-sha',
+      old_commit_id: 'old-release-sha',
+      force: true,
+    });
+    expect((fetchMock.mock.calls[4]?.[0] as URL).toString()).toContain(
+      '/pulls/7/update?style=rebase',
+    );
+  });
+
+  it('recursively lists repository files for extra-files globs', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { path: 'package.json', sha: 'one', type: 'file' },
+          { path: 'packages', sha: 'two', type: 'dir' },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([{ path: 'packages/api.json', sha: 'three', type: 'file' }]),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+    );
+
+    await expect(client.listFiles('main')).resolves.toEqual([
+      'package.json',
+      'packages/api.json',
+    ]);
+    expect((fetchMock.mock.calls[1]?.[0] as URL).pathname).toContain(
+      '/contents/packages',
+    );
+  });
+
+  it('passes draft and prerelease flags to Gitea releases', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 1,
+        tag_name: 'v2.0.0-beta.0',
+        name: 'v2.0.0-beta.0',
+        body: 'notes',
+        html_url: 'https://gitea.example/acme/demo/releases/tag/v2.0.0-beta.0',
+      }, 201),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+    );
+
+    await client.createRelease({
+      tagName: 'v2.0.0-beta.0',
+      target: 'release-sha',
+      body: 'notes',
+      draft: true,
+      prerelease: true,
+    });
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      draft: true,
+      prerelease: true,
+    });
   });
 });

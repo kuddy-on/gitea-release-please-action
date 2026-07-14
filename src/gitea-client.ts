@@ -1,6 +1,10 @@
+import { ProxyAgent, type Dispatcher } from 'undici';
+
 import type {
+  AuthenticatedUser,
   ChangeFileOperation,
   PullRequest,
+  PullRequestChangedFile,
   Repository,
   RepositoryBranch,
   RepositoryCommit,
@@ -19,6 +23,7 @@ interface RequestOptions {
 interface ChangeFilesOptions {
   branch: string;
   newBranch?: string;
+  forcePush?: boolean;
   message: string;
   files: ChangeFileOperation[];
 }
@@ -39,7 +44,10 @@ interface EditPullRequestOptions {
 interface CreateReleaseOptions {
   tagName: string;
   target: string;
+  name?: string;
   body: string;
+  draft?: boolean;
+  prerelease?: boolean;
 }
 
 interface FilesResponse {
@@ -71,14 +79,17 @@ function delay(milliseconds: number): Promise<void> {
 
 export class GiteaClient {
   private readonly repositoryPath: string;
+  private readonly dispatcher?: Dispatcher;
 
   constructor(
     private readonly apiUrl: string,
     private readonly token: string,
     owner: string,
     repo: string,
+    proxyServer?: string,
   ) {
     this.repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    if (proxyServer) this.dispatcher = new ProxyAgent(proxyServer);
   }
 
   private async request<T>(
@@ -94,7 +105,7 @@ export class GiteaClient {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: Response;
       try {
-        const requestInit: RequestInit = {
+        const requestInit: RequestInit & { dispatcher?: Dispatcher } = {
           method,
           headers: {
             Accept: 'application/json',
@@ -104,6 +115,7 @@ export class GiteaClient {
           },
           signal: AbortSignal.timeout(30_000),
         };
+        if (this.dispatcher) requestInit.dispatcher = this.dispatcher;
         if (options.body !== undefined) requestInit.body = JSON.stringify(options.body);
         response = await fetch(url, requestInit);
       } catch (error) {
@@ -163,12 +175,32 @@ export class GiteaClient {
     return repository;
   }
 
-  async listCommits(branch: string): Promise<RepositoryCommit[]> {
+  async getAuthenticatedUser(): Promise<AuthenticatedUser> {
+    const user = await this.request<AuthenticatedUser>('GET', '/user');
+    if (!user?.login) throw new Error('Gitea returned an empty authenticated user response.');
+    return user;
+  }
+
+  async listForks(): Promise<Repository[]> {
+    return this.listAll<Repository>(`${this.repositoryPath}/forks`);
+  }
+
+  async createFork(): Promise<Repository> {
+    const repository = await this.request<Repository>(
+      'POST',
+      `${this.repositoryPath}/forks`,
+      { body: {} },
+    );
+    if (!repository) throw new Error('Gitea returned an empty fork response.');
+    return repository;
+  }
+
+  async listCommits(branch: string, includeFiles = false): Promise<RepositoryCommit[]> {
     return this.listAll<RepositoryCommit>(`${this.repositoryPath}/commits`, {
       sha: branch,
       stat: false,
       verification: false,
-      files: false,
+      files: includeFiles,
     });
   }
 
@@ -177,6 +209,34 @@ export class GiteaClient {
       'GET',
       `${this.repositoryPath}/branches/${encodeURIComponent(branch)}`,
       { allowNotFound: true },
+    );
+  }
+
+  async createBranch(branch: string, oldRef: string): Promise<RepositoryBranch> {
+    const created = await this.request<RepositoryBranch>(
+      'POST',
+      `${this.repositoryPath}/branches`,
+      { body: { new_branch_name: branch, old_ref_name: oldRef } },
+    );
+    if (!created) throw new Error('Gitea returned an empty branch response.');
+    return created;
+  }
+
+  async updateBranch(
+    branch: string,
+    newCommitId: string,
+    oldCommitId?: string,
+  ): Promise<void> {
+    await this.request(
+      'PUT',
+      `${this.repositoryPath}/branches/${encodeURIComponent(branch)}`,
+      {
+        body: {
+          new_commit_id: newCommitId,
+          force: true,
+          ...(oldCommitId ? { old_commit_id: oldCommitId } : {}),
+        },
+      },
     );
   }
 
@@ -215,6 +275,32 @@ export class GiteaClient {
     });
   }
 
+  async getPullRequest(number: number): Promise<PullRequest> {
+    const pullRequest = await this.request<PullRequest>(
+      'GET',
+      `${this.repositoryPath}/pulls/${number}`,
+    );
+    if (!pullRequest) throw new Error('Gitea returned an empty pull request response.');
+    return pullRequest;
+  }
+
+  async listPullRequestFiles(number: number): Promise<PullRequestChangedFile[]> {
+    return this.listAll<PullRequestChangedFile>(
+      `${this.repositoryPath}/pulls/${number}/files`,
+    );
+  }
+
+  async updatePullRequestBranch(
+    number: number,
+    style: 'merge' | 'rebase' = 'rebase',
+  ): Promise<void> {
+    await this.request(
+      'POST',
+      `${this.repositoryPath}/pulls/${number}/update`,
+      { query: { style } },
+    );
+  }
+
   async createPullRequest(options: CreatePullRequestOptions): Promise<PullRequest> {
     const pullRequest = await this.request<PullRequest>(
       'POST',
@@ -238,12 +324,6 @@ export class GiteaClient {
     return pullRequest;
   }
 
-  async updatePullRequestBranch(number: number): Promise<void> {
-    await this.request('POST', `${this.repositoryPath}/pulls/${number}/update`, {
-      query: { style: 'merge' },
-    });
-  }
-
   async getContent(path: string, ref: string): Promise<RepositoryContent | null> {
     return this.request<RepositoryContent>(
       'GET',
@@ -255,10 +335,36 @@ export class GiteaClient {
   async getTextContent(path: string, ref: string): Promise<string | null> {
     const content = await this.getContent(path, ref);
     if (!content) return null;
+    if (content.content === undefined) {
+      throw new Error(`Repository path ${path} is not a file.`);
+    }
     if (content.encoding !== 'base64') {
       throw new Error(`Unsupported content encoding ${content.encoding} for ${path}.`);
     }
     return Buffer.from(content.content.replace(/\s/g, ''), 'base64').toString('utf8');
+  }
+
+  async listFiles(ref: string): Promise<string[]> {
+    const files: string[] = [];
+    const pending = [''];
+    while (pending.length > 0) {
+      const directory = pending.pop() ?? '';
+      const suffix = directory === '' ? '/contents' : `/contents/${encodePath(directory)}`;
+      const entries = await this.request<RepositoryContent[] | RepositoryContent>(
+        'GET',
+        `${this.repositoryPath}${suffix}`,
+        { query: { ref } },
+      );
+      if (!entries) continue;
+      for (const entry of Array.isArray(entries) ? entries : [entries]) {
+        if (entry.type === 'dir') pending.push(entry.path);
+        else files.push(entry.path);
+        if (files.length + pending.length > 10_000) {
+          throw new Error('Repository contains too many paths to expand extra-files globs.');
+        }
+      }
+    }
+    return files.sort();
   }
 
   async changeFiles(options: ChangeFilesOptions): Promise<string> {
@@ -274,6 +380,7 @@ export class GiteaClient {
       })),
     };
     if (options.newBranch) body.new_branch = options.newBranch;
+    if (options.forcePush !== undefined) body.force_push = options.forcePush;
 
     const response = await this.request<FilesResponse>(
       'POST',
@@ -300,10 +407,10 @@ export class GiteaClient {
         body: {
           tag_name: options.tagName,
           target_commitish: options.target,
-          name: options.tagName,
+          name: options.name ?? options.tagName,
           body: options.body,
-          draft: false,
-          prerelease: false,
+          draft: options.draft ?? false,
+          prerelease: options.prerelease ?? false,
         },
       },
     );
