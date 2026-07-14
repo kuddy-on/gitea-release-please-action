@@ -3,7 +3,7 @@ import semver from 'semver';
 
 import { parseExtraFiles } from './extra-files.js';
 import type { GiteaClient } from './gitea-client.js';
-import { normalizePackagePath, ROOT_PROJECT_PATH } from './repository-path.js';
+import { addPath, normalizePackagePath, ROOT_PROJECT_PATH } from './repository-path.js';
 import type {
   ActionConfig,
   ChangelogSection,
@@ -263,15 +263,17 @@ function validateVersioning(value: unknown): VersioningStrategy {
 
 function checkConfig(config: ActionConfig): void {
   const generatedPaths = new Set([
-    config.changelogPath,
-    config.releaseNotesPath,
-    config.versionFile,
+    addPath(config.path, config.changelogPath),
+    addPath(config.path, config.releaseNotesPath),
+    config.manifestFile,
   ]);
   if (generatedPaths.size !== 3) {
-    throw new Error('changelog-path, release-notes-path, and version-file must be different files.');
+    throw new Error(
+      'changelog-path, release-notes-path, and manifest-file must be different files.',
+    );
   }
   for (const extraFile of config.extraFiles) {
-    if (generatedPaths.has(extraFile.path)) {
+    if (generatedPaths.has(addPath(config.path, extraFile.path))) {
       throw new Error(`extra-files path ${extraFile.path} conflicts with a release file.`);
     }
   }
@@ -312,6 +314,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
   );
   const releaseAsInput = optionalInput('release-as');
   const prereleaseType = optionalInput('prerelease-type');
+  if (optionalInput('version-file')) {
+    throw new Error(
+      'version-file is no longer supported; use manifest-file and extra-files.',
+    );
+  }
   const includeV = booleanInput('include-v-in-tag', true, env);
   const tagPrefix = hasInput('tag-prefix', env)
     ? inputWithDefault('tag-prefix', '', env)
@@ -324,6 +331,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
     ...normalizeUrls(serverUrl),
     ...parseRepository(repository),
     fork: booleanInput('fork', false, env),
+    manifestFile: validatePath(
+      'manifest-file',
+      optionalInput('manifest-file') ?? '.release-please-manifest.json',
+    ),
     path: normalizePackagePath(optionalInput('path') ?? ROOT_PROJECT_PATH),
     releaseType: 'simple',
     initialVersion,
@@ -337,10 +348,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
     releaseNotesPath: validatePath(
       'release-notes-path',
       optionalInput('release-notes-path') ?? 'RELEASE.md',
-    ),
-    versionFile: validatePath(
-      'version-file',
-      optionalInput('version-file') ?? 'version.txt',
     ),
     extraFiles: parseExtraFiles(optionalInput('extra-files')),
     excludePaths: parsePaths('exclude-paths', optionalInput('exclude-paths'), []),
@@ -486,6 +493,11 @@ export function applyRepositoryConfig(
   if (raw['changelog-type'] !== undefined && raw['changelog-type'] !== 'default') {
     throw new Error('Only changelog-type default is supported on Gitea.');
   }
+  if (raw['version-file'] !== undefined) {
+    throw new Error(
+      'version-file is no longer supported; use manifest-file and extra-files.',
+    );
+  }
 
   const tagPrefix =
     raw['tag-prefix'] !== undefined
@@ -518,7 +530,6 @@ export function applyRepositoryConfig(
       'release-notes-path',
       raw['release-notes-path'] ?? base.releaseNotesPath,
     ),
-    versionFile: validatePath('version-file', raw['version-file'] ?? base.versionFile),
     extraFiles:
       raw['extra-files'] === undefined
         ? base.extraFiles

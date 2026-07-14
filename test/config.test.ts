@@ -7,6 +7,8 @@ const INPUT_NAMES = [
   'INPUT_GITEA-URL',
   'INPUT_REPOSITORY',
   'INPUT_PATH',
+  'INPUT_MANIFEST-FILE',
+  'INPUT_VERSION-FILE',
   'INPUT_PROXY-SERVER',
   'INPUT_TAG-PREFIX',
   'INPUT_INCLUDE-V-IN-TAG',
@@ -24,6 +26,8 @@ describe('action configuration', () => {
     process.env.INPUT_REPOSITORY = 'acme/demo';
     delete process.env['INPUT_TAG-PREFIX'];
     delete process.env.INPUT_PATH;
+    delete process.env['INPUT_MANIFEST-FILE'];
+    delete process.env['INPUT_VERSION-FILE'];
     delete process.env['INPUT_PROXY-SERVER'];
     delete process.env['INPUT_INCLUDE-V-IN-TAG'];
     delete process.env['INPUT_EXTRA-FILES'];
@@ -47,7 +51,7 @@ describe('action configuration', () => {
       path: '.',
       initialVersion: '1.0.0',
       tagPrefix: 'v',
-      versionFile: 'version.txt',
+      manifestFile: '.release-please-manifest.json',
       labels: ['autorelease: pending'],
       releaseLabels: ['autorelease: tagged'],
     });
@@ -59,6 +63,11 @@ describe('action configuration', () => {
 
     process.env.INPUT_PATH = '../api';
     expect(() => loadConfig()).toThrow('repository-relative directory');
+  });
+
+  it('supports a repository-relative custom manifest file', () => {
+    process.env['INPUT_MANIFEST-FILE'] = 'release/manifest.json';
+    expect(loadConfig().manifestFile).toBe('release/manifest.json');
   });
 
   it('supports both include-v-in-tag false and an explicitly empty tag prefix', () => {
@@ -95,8 +104,15 @@ describe('action configuration', () => {
   });
 
   it('rejects extra files that conflict with generated release files', () => {
-    process.env['INPUT_EXTRA-FILES'] = JSON.stringify(['CHANGELOG.md']);
+    process.env['INPUT_EXTRA-FILES'] = JSON.stringify([
+      '.release-please-manifest.json',
+    ]);
     expect(() => loadConfig()).toThrow('conflicts with a release file');
+  });
+
+  it('rejects the removed version-file setting with migration guidance', () => {
+    process.env['INPUT_VERSION-FILE'] = 'version.txt';
+    expect(() => loadConfig()).toThrow('use manifest-file and extra-files');
   });
 
   it('loads official root package configuration while retaining action defaults', () => {
@@ -135,7 +151,6 @@ describe('action configuration', () => {
         packages: {
           'packages/api': {
             'release-type': 'simple',
-            'version-file': 'VERSION',
           },
         },
       }),
@@ -143,7 +158,6 @@ describe('action configuration', () => {
 
     expect(configured).toMatchObject({
       path: 'packages/api',
-      versionFile: 'VERSION',
       tagPrefix: '',
     });
   });

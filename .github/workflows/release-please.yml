@@ -19,7 +19,8 @@ jobs:
         uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: node
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
       - name: Check out released commit
         if: ${{ steps.release.outputs.release_created }}

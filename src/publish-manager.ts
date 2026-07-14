@@ -1,6 +1,7 @@
 import semver from 'semver';
 
 import { GiteaClient } from './gitea-client.js';
+import { packageVersion, parseManifest } from './manifest.js';
 import { parseMarker } from './marker.js';
 import type { ReleaseHead } from './release-head.js';
 import { addPath, ROOT_PROJECT_PATH } from './repository-path.js';
@@ -109,20 +110,36 @@ export class PublishManager {
       this.config.path,
       this.config.releaseNotesPath,
     );
-    const expectedVersionFile = addPath(this.config.path, this.config.versionFile);
+    const expectedManifestPath = this.config.manifestFile;
     if (
+      marker.schema !== 2 ||
       marker.releaseNotesPath !== expectedReleaseNotesPath ||
       marker.changelogPath !== expectedChangelogPath ||
-      marker.fileHashes[expectedVersionFile] === undefined
+      marker.manifestPath !== expectedManifestPath ||
+      marker.fileHashes[expectedManifestPath] === undefined
     ) {
       throw new Error(
         `Release PR #${pullRequest.number} marker does not match the configured release files.`,
       );
     }
-    const versionFile = await this.client.getTextContent(expectedVersionFile, mergeSha);
-    if (versionFile?.trim() !== marker.version) {
+    const manifestContent = await this.client.getTextContent(
+      expectedManifestPath,
+      mergeSha,
+    );
+    if (manifestContent === null) {
       throw new Error(
-        `Release PR #${pullRequest.number} ${expectedVersionFile} does not contain ${marker.version}.`,
+        `Release PR #${pullRequest.number} does not contain ${expectedManifestPath}.`,
+      );
+    }
+    const manifest = parseManifest(manifestContent, expectedManifestPath);
+    const releasedVersion = packageVersion(
+      manifest,
+      this.config.path,
+      expectedManifestPath,
+    );
+    if (releasedVersion !== marker.version) {
+      throw new Error(
+        `Release PR #${pullRequest.number} ${expectedManifestPath} records ${releasedVersion ?? '<missing>'}, not ${marker.version}.`,
       );
     }
     const markerFiles = new Set(Object.keys(marker.fileHashes));

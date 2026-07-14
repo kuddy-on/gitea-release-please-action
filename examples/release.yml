@@ -19,7 +19,7 @@ jobs:
       actions: write
     runs-on: ubuntu-latest
     steps:
-      - uses: https://github.com/kuddy-on/gitea-release-please-action@v1
+      - uses: https://github.com/kuddy-on/gitea-release-please-action@v2
         id: release
         with:
           token: ${{ secrets.GITEA_TOKEN }}

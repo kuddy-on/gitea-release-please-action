@@ -86,8 +86,8 @@ curl -fsS \
 curl -fsS \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
-  -d '{"branch":"main","message":"chore: add version file","content":"MC4wLjAK"}' \
-  "${ROOT_URL}/api/v1/repos/e2e/demo/contents/version.txt" >"${WORK_DIR}/version-commit.json"
+  -d '{"branch":"main","message":"chore: add release manifest","content":"e30K"}' \
+  "${ROOT_URL}/api/v1/repos/e2e/demo/contents/.release-please-manifest.json" >"${WORK_DIR}/manifest-commit.json"
 curl -fsS \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
@@ -223,7 +223,7 @@ fi
 test "$(read_file package.json release-please--branches--main | jq -r '.version')" = '0.1.0'
 test "$(read_file packages/worker.json release-please--branches--main | jq -r '.version')" = '0.1.0'
 read_file pyproject.toml release-please--branches--main | grep -q 'version = "0.1.0"'
-test "$(read_file version.txt release-please--branches--main)" = '0.1.0'
+test "$(read_file .release-please-manifest.json release-please--branches--main | jq -r '.["."]')" = '0.1.0'
 
 curl -fsS \
   -H "${AUTH_HEADER}" \
@@ -415,8 +415,8 @@ curl -fsS \
 curl -fsS \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
-  -d '{"branch":"main","message":"chore: add package version","content":"MC4wLjAK"}' \
-  "${ROOT_URL}/api/v1/repos/release-team/path-demo/contents/packages/api/version.txt" >"${WORK_DIR}/path-version.json"
+  -d '{"branch":"main","message":"chore: add release manifest","content":"e30K"}' \
+  "${ROOT_URL}/api/v1/repos/release-team/path-demo/contents/.release-please-manifest.json" >"${WORK_DIR}/path-manifest.json"
 curl -fsS \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
@@ -440,6 +440,10 @@ path_notes="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/RELEASE.md?ref=release-please--branches--main" | \
   jq -r '.content' | tr -d '\n' | base64 -d)"
 grep -q 'package feature' <<<"${path_notes}"
+path_manifest="$(curl -fsS -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/.release-please-manifest.json?ref=release-please--branches--main" | \
+  jq -r '.content' | tr -d '\n' | base64 -d)"
+test "$(jq -r '.["packages/api"]' <<<"${path_manifest}")" = '0.1.0'
 if grep -q 'unrelated root break' <<<"${path_notes}"; then
   echo 'Root-only commit appeared in path-scoped release notes.' >&2
   exit 1

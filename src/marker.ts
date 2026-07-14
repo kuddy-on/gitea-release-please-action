@@ -30,7 +30,7 @@ function isMarker(value: unknown): value is ReleaseMarker {
   const marker = value as Partial<ReleaseMarker>;
   const fileHashes = marker.fileHashes;
   if (
-    marker.schema !== 1 ||
+    (marker.schema !== 1 && marker.schema !== 2) ||
     (marker.path !== undefined && typeof marker.path !== 'string') ||
     typeof marker.version !== 'string' ||
     typeof marker.tagName !== 'string' ||
@@ -40,6 +40,7 @@ function isMarker(value: unknown): value is ReleaseMarker {
         !/^[0-9a-f]{7,64}$/.test(marker.targetHeadSha))) ||
     (marker.changelogPath !== undefined && typeof marker.changelogPath !== 'string') ||
     typeof marker.releaseNotesPath !== 'string' ||
+    (marker.manifestPath !== undefined && typeof marker.manifestPath !== 'string') ||
     !fileHashes ||
     typeof fileHashes !== 'object'
   ) {
@@ -49,6 +50,9 @@ function isMarker(value: unknown): value is ReleaseMarker {
     ? fileHashes[marker.changelogPath]
     : undefined;
   const releaseNotesHash = fileHashes[marker.releaseNotesPath];
+  const manifestHash = marker.manifestPath
+    ? fileHashes[marker.manifestPath]
+    : undefined;
   return (
     Object.entries(fileHashes).every(
       ([path, hash]) => path !== '' && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash),
@@ -56,7 +60,11 @@ function isMarker(value: unknown): value is ReleaseMarker {
     (marker.changelogPath === undefined ||
       (typeof changelogHash === 'string' && /^[0-9a-f]{64}$/.test(changelogHash))) &&
     typeof releaseNotesHash === 'string' &&
-    /^[0-9a-f]{64}$/.test(releaseNotesHash)
+    /^[0-9a-f]{64}$/.test(releaseNotesHash) &&
+    (marker.schema === 1 ||
+      (typeof marker.manifestPath === 'string' &&
+        typeof manifestHash === 'string' &&
+        /^[0-9a-f]{64}$/.test(manifestHash)))
   );
 }
 

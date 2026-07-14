@@ -3,6 +3,7 @@ import semver from 'semver';
 import { parseChanges } from './conventional.js';
 import { expandExtraFiles, updateExtraFile } from './extra-files.js';
 import { GiteaApiError, GiteaClient } from './gitea-client.js';
+import { packageVersion, parseManifest, updateManifest } from './manifest.js';
 import { buildPullRequestBody, hashContent, parseMarker } from './marker.js';
 import { generateReleaseMarkdown } from './markdown.js';
 import type { ReleaseHead } from './release-head.js';
@@ -65,13 +66,14 @@ function createMarker(
   candidate: ReleaseCandidate,
 ): ReleaseMarker {
   const marker: ReleaseMarker = {
-    schema: 1,
+    schema: 2,
     path: config.path,
     version: candidate.version,
     tagName: candidate.tagName,
     targetBranch,
     targetHeadSha,
     releaseNotesPath: addPath(config.path, config.releaseNotesPath),
+    manifestPath: config.manifestFile,
     fileHashes: Object.fromEntries(
       Object.entries(candidate.files).map(([path, content]) => [path, hashContent(content)]),
     ),
@@ -145,8 +147,30 @@ export class ReleaseManager {
       prCreated: false,
       prUpdated: false,
     };
+    const untaggedMerged = await this.findUntaggedMergedRelease(targetBranch);
+    if (untaggedMerged) {
+      this.logger.warning(
+        `Release PR #${untaggedMerged.number} is merged but untagged; skipping release PR creation.`,
+      );
+      return result;
+    }
 
-    const scan = await this.scanCommits(targetBranch);
+    const manifestContent = await this.client.getTextContent(
+      this.config.manifestFile,
+      targetBranch,
+    );
+    if (manifestContent === null) {
+      throw new Error(
+        `Manifest file ${this.config.manifestFile} does not exist on ${targetBranch}.`,
+      );
+    }
+    const manifest = parseManifest(manifestContent, this.config.manifestFile);
+    const previousVersion = packageVersion(
+      manifest,
+      this.config.path,
+      this.config.manifestFile,
+    );
+    const scan = await this.scanCommits(targetBranch, previousVersion);
     const commits = await this.applyCommitOverrides(
       scan.commits.filter((commit) => this.includeCommit(commit)),
     );
@@ -156,27 +180,14 @@ export class ReleaseManager {
       return result;
     }
 
-    const previousVersion = scan.previousTag
-      ? versionFromTag(scan.previousTag.name, this.config.tagPrefix)
-      : null;
     const version = calculateVersion(previousVersion, changes, this.config);
 
     const tagName = `${this.config.tagPrefix}${version}`;
     const changelogPath = addPath(this.config.path, this.config.changelogPath);
     const releaseNotesPath = addPath(this.config.path, this.config.releaseNotesPath);
-    const versionFile = addPath(this.config.path, this.config.versionFile);
     const existingChangelog = this.config.skipChangelog
       ? null
       : await this.client.getTextContent(changelogPath, targetBranch);
-    const currentVersionFile = await this.client.getTextContent(
-      versionFile,
-      targetBranch,
-    );
-    if (currentVersionFile === null) {
-      throw new Error(
-        `Simple release version file ${versionFile} does not exist on ${targetBranch}.`,
-      );
-    }
     const now = this.now();
     const date = formatDate(now, '%Y-%m-%d');
     const extraFileDate = formatDate(now, this.config.dateFormat);
@@ -195,7 +206,7 @@ export class ReleaseManager {
     });
     const files: Record<string, string> = {
       [releaseNotesPath]: markdown.releaseNotes,
-      [versionFile]: `${version}\n`,
+      [this.config.manifestFile]: updateManifest(manifest, this.config.path, version),
     };
     if (!this.config.skipChangelog) files[changelogPath] = markdown.changelog;
     const repositoryExtraFiles = this.config.extraFiles.map((file) => ({
@@ -209,7 +220,7 @@ export class ReleaseManager {
     const reservedPaths = new Set([
       changelogPath,
       releaseNotesPath,
-      versionFile,
+      this.config.manifestFile,
     ]);
     const reservedMatch = configuredExtraFiles.find((file) => reservedPaths.has(file.path));
     if (reservedMatch) {
@@ -284,7 +295,31 @@ export class ReleaseManager {
     );
   }
 
-  private async scanCommits(targetBranch: string): Promise<CommitScan> {
+  private async findUntaggedMergedRelease(
+    targetBranch: string,
+  ): Promise<PullRequest | undefined> {
+    const [closedPullRequests, tags] = await Promise.all([
+      this.client.listPullRequests('closed'),
+      this.client.listTags(),
+    ]);
+    const tagNames = new Set(tags.map((tag) => tag.name));
+    return closedPullRequests.find((pullRequest) => {
+      if (!pullRequest.merged) return false;
+      const marker = parseMarker(pullRequest.body ?? '');
+      if (!marker || marker.targetBranch !== targetBranch || tagNames.has(marker.tagName)) {
+        return false;
+      }
+      if ((marker.path ?? ROOT_PROJECT_PATH) !== this.config.path) return false;
+      if (this.config.skipLabeling) return true;
+      const names = new Set((pullRequest.labels ?? []).map((label) => label.name));
+      return this.config.labels.every((label) => names.has(label));
+    });
+  }
+
+  private async scanCommits(
+    targetBranch: string,
+    previousVersion: string | null,
+  ): Promise<CommitScan> {
     const [commits, tags] = await Promise.all([
       this.client.listCommits(
         targetBranch,
@@ -295,30 +330,37 @@ export class ReleaseManager {
     const targetHead = commits[0];
     if (!targetHead) throw new Error(`Target branch ${targetBranch} has no commits.`);
 
-    const tagsByCommit = new Map<string, RepositoryTag[]>();
-    for (const tag of tags) {
-      if (!versionFromTag(tag.name, this.config.tagPrefix)) continue;
-      const existing = tagsByCommit.get(tag.commit.sha) ?? [];
-      existing.push(tag);
-      tagsByCommit.set(tag.commit.sha, existing);
+    const releaseTags = tags.filter(
+      (tag) => versionFromTag(tag.name, this.config.tagPrefix) !== null,
+    );
+    const expectedTagName =
+      previousVersion === null
+        ? null
+        : `${this.config.tagPrefix}${previousVersion}`;
+    const expectedTag = expectedTagName
+      ? releaseTags.find((tag) => tag.name === expectedTagName)
+      : undefined;
+    if (previousVersion === null && releaseTags.length > 0) {
+      throw new Error(
+        `${this.config.manifestFile} has no ${this.config.path} entry, but release tags already exist. Initialize the manifest with the latest released version.`,
+      );
+    }
+    if (
+      previousVersion !== null &&
+      !expectedTag &&
+      (previousVersion !== '0.0.0' || releaseTags.length > 0)
+    ) {
+      throw new Error(
+        `${this.config.manifestFile} expects release tag ${expectedTagName}, but it does not exist.`,
+      );
     }
 
     const selectedCommits: RepositoryCommit[] = [];
-    let previousTag: RepositoryTag | undefined;
-    const boundarySha = this.config.lastReleaseSha ?? this.config.bootstrapSha;
+    const boundarySha =
+      expectedTag?.commit.sha ?? this.config.lastReleaseSha ?? this.config.bootstrapSha;
     let foundBoundary = !boundarySha;
 
     for (const commit of commits) {
-      const matchingTags = tagsByCommit.get(commit.sha);
-      if (matchingTags && matchingTags.length > 0) {
-        previousTag = matchingTags.sort((left, right) => {
-          const leftVersion = versionFromTag(left.name, this.config.tagPrefix) ?? '0.0.0';
-          const rightVersion = versionFromTag(right.name, this.config.tagPrefix) ?? '0.0.0';
-          return semver.rcompare(leftVersion, rightVersion);
-        })[0];
-        break;
-      }
-
       if (boundarySha && commit.sha.startsWith(boundarySha)) {
         foundBoundary = true;
         break;
@@ -326,9 +368,11 @@ export class ReleaseManager {
       selectedCommits.push(commit);
     }
 
-    if (!foundBoundary && !previousTag) {
+    if (!foundBoundary) {
       throw new Error(
-        `commit boundary ${boundarySha} was not found on ${targetBranch}.`,
+        expectedTag
+          ? `Manifest release tag ${expectedTag.name} is not reachable from ${targetBranch}.`
+          : `commit boundary ${boundarySha} was not found on ${targetBranch}.`,
       );
     }
 
@@ -336,7 +380,7 @@ export class ReleaseManager {
       commits: selectedCommits.reverse(),
       targetHeadSha: targetHead.sha,
     };
-    if (previousTag) scan.previousTag = previousTag;
+    if (expectedTag) scan.previousTag = expectedTag;
     return scan;
   }
 
@@ -348,28 +392,6 @@ export class ReleaseManager {
   ): Promise<void> {
     const branch = releaseBranchName(targetBranch);
     const repository = this.head.fullName;
-    const [closedPullRequests, tags] = await Promise.all([
-      this.client.listPullRequests('closed'),
-      this.client.listTags(),
-    ]);
-    const tagNames = new Set(tags.map((tag) => tag.name));
-    const untaggedMerged = closedPullRequests.find((pullRequest) => {
-      if (!pullRequest.merged) return false;
-      const marker = parseMarker(pullRequest.body ?? '');
-      if (!marker || marker.targetBranch !== targetBranch || tagNames.has(marker.tagName)) {
-        return false;
-      }
-      if ((marker.path ?? ROOT_PROJECT_PATH) !== this.config.path) return false;
-      if (this.config.skipLabeling) return true;
-      const names = new Set((pullRequest.labels ?? []).map((label) => label.name));
-      return this.config.labels.every((label) => names.has(label));
-    });
-    if (untaggedMerged) {
-      this.logger.warning(
-        `Release PR #${untaggedMerged.number} is merged but untagged; skipping release PR creation.`,
-      );
-      return;
-    }
     const pullRequests = await this.client.listPullRequests('open');
     const releasePullRequests = pullRequests.filter((pullRequest) => {
       const marker = parseMarker(pullRequest.body ?? '');
@@ -440,7 +462,8 @@ export class ReleaseManager {
         (this.config.skipChangelog
           ? undefined
           : addPath(this.config.path, this.config.changelogPath)) ||
-      previousMarker.releaseNotesPath !== addPath(this.config.path, this.config.releaseNotesPath)
+      previousMarker.releaseNotesPath !== addPath(this.config.path, this.config.releaseNotesPath) ||
+      previousMarker.manifestPath !== this.config.manifestFile
     ) {
       throw new Error(
         `Release file paths changed while PR #${existingPullRequest.number} is open. Close it before changing action paths.`,

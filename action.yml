@@ -28,6 +28,10 @@ inputs:
   config-file:
     description: Optional Release Please JSON config path. Exactly one package is supported.
     required: false
+  manifest-file:
+    description: Release Please manifest containing the last released version for the configured package.
+    required: false
+    default: .release-please-manifest.json
   release-type:
     description: Release strategy. This build supports simple only.
     required: false
@@ -37,7 +41,7 @@ inputs:
     required: false
     default: '.'
   initial-version:
-    description: Version used for the first release when no matching tag exists.
+    description: Version used for the first release when the manifest has no configured package entry.
     required: false
     default: 1.0.0
   release-as:
@@ -65,10 +69,6 @@ inputs:
     description: File containing the pending Gitea Release body.
     required: false
     default: RELEASE.md
-  version-file:
-    description: Existing simple release version file.
-    required: false
-    default: version.txt
   extra-files:
     description: JSON array of additional generic, JSON, TOML, YAML, or XML version files.
     required: false
