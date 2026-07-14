@@ -51,7 +51,11 @@ jobs:
           '
 ```
 
-For an action mirrored on the same Gitea instance, use `owner/gitea-release-please-action@v2`.
+Short references such as `owner/gitea-release-please-action@v2` resolve against Gitea's
+`[actions].DEFAULT_ACTIONS_URL`, which defaults to GitHub. For an action mirrored on an
+internal Gitea instance, use its absolute URL, for example
+`https://gitea.example.com/owner/gitea-release-please-action@v2`. Use a short reference
+only when the server is intentionally configured with `DEFAULT_ACTIONS_URL=self`.
 
 Add `.release-please-manifest.json` before the first run. An empty object bootstraps a new package; an existing project must record its latest released version:
 
@@ -71,6 +75,11 @@ Merging the Release PR creates a `push` on `main`; that push starts the action a
 ## Release PR behavior
 
 The action parses Conventional Commits since the Tag recorded by `.release-please-manifest.json`. `feat` produces a minor bump, `fix`, `perf`, `deps`, and `revert` produce a patch, and `!` or `BREAKING CHANGE:` produces a major bump. Before 1.0, the two pre-major bump options can alter this behavior. A manifest version must have a matching reachable Tag; an empty manifest is accepted only when no release Tags exist.
+
+When using Gitea's merge-commit method for ordinary pull requests, keep the default merge
+title. A custom Conventional Commit merge title is parsed in addition to Conventional
+Commits already present in the pull request and can produce duplicate changelog entries.
+Squash merges contain only the resulting squash commit and are not affected by this rule.
 
 The first release defaults to `1.0.0` when the manifest has no package entry. The Release PR updates:
 

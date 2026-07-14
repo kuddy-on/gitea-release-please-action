@@ -103,7 +103,7 @@ export interface RepositoryCommit {
     username?: string;
     full_name?: string;
   };
-  files?: PullRequestChangedFile[];
+  files?: PullRequestChangedFile[] | null;
 }
 
 export interface RepositoryTag {
