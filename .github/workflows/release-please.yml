@@ -1,0 +1,45 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release pull request or publish release
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: node
+
+      - name: Check out released commit
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Move major version tag
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          MAJOR: ${{ steps.release.outputs.major }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          VERSION_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          if [[ ! "${MAJOR}" =~ ^[0-9]+$ ]] ||
+             [[ ! "${VERSION_TAG}" =~ ^v${MAJOR}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected stable release tag ${VERSION_TAG}."
+            exit 1
+          fi
+
+          major_tag="v${MAJOR}"
+          git tag --force "${major_tag}" "${RELEASE_SHA}"
+          git push origin "refs/tags/${major_tag}" --force
