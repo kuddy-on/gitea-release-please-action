@@ -27,6 +27,13 @@ jobs:
   integration:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - mode: v-prefix
+            tag_prefix: v
+          - mode: empty-prefix
+            tag_prefix: ''
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -35,4 +42,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm run test:integration
+      - name: Run ${{ matrix.mode }} integration test
+        env:
+          GITEA_E2E_TAG_PREFIX: ${{ matrix.tag_prefix }}
+        run: npm run test:integration

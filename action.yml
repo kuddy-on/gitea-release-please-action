@@ -1,65 +1,226 @@
 name: Gitea Release Please
-description: Maintain a release PR from Conventional Commits and publish Gitea tags and releases.
+description: A single-package Google Release Please compatible action for Gitea.
 author: kuddy-on
 
 inputs:
   token:
-    description: Gitea Actions GITEA_TOKEN or personal access token with repository, pull request, issue, and release write access.
+    description: Gitea Actions GITEA_TOKEN or a token with repository write access.
     required: true
   gitea-url:
-    description: Gitea server URL or API v1 URL. Defaults to the current Gitea Actions server URL.
+    description: Gitea server root or API v1 URL. Defaults to GITEA_SERVER_URL.
     required: false
   repository:
-    description: Repository in owner/name form. Defaults to the current Gitea Actions repository.
+    description: Repository in owner/name form. Defaults to GITEA_REPOSITORY.
     required: false
+  repo-url:
+    description: Google-compatible alias for repository.
+    required: false
+  proxy-server:
+    description: HTTP or HTTPS proxy used for Gitea API requests, as host:port or a full URL.
+    required: false
+  fork:
+    description: Create and manage the Release PR branch in the token user's fork.
+    required: false
+    default: 'false'
   target-branch:
-    description: Branch against which the release pull request is opened. Defaults to the repository default branch.
+    description: Branch targeted by the release pull request. Defaults to the repository default branch.
     required: false
+  config-file:
+    description: Optional Release Please JSON config path. Exactly one package is supported.
+    required: false
+  release-type:
+    description: Release strategy. This build supports simple only.
+    required: false
+    default: simple
+  path:
+    description: Release a single package from this repository-relative directory. Defaults to the repository root.
+    required: false
+    default: '.'
   initial-version:
     description: Version used for the first release when no matching tag exists.
     required: false
-    default: 0.1.0
-  tag-prefix:
-    description: Prefix applied to semantic version tags.
+    default: 1.0.0
+  release-as:
+    description: Force the next release to a full SemVer version.
     required: false
-    default: v
+  tag-prefix:
+    description: Explicit tag prefix. Set to an empty string for tags such as 1.2.3.
+    required: false
+  include-v-in-tag:
+    description: Prefix tags with v when tag-prefix is not supplied.
+    required: false
+    default: 'true'
+  include-v-in-release-name:
+    description: Prefix the Gitea Release display name with v.
+    required: false
+    default: 'true'
   changelog-path:
-    description: Path to the cumulative changelog file.
+    description: Cumulative changelog path.
     required: false
     default: CHANGELOG.md
+  changelog-host:
+    description: Host used for changelog commit and compare links.
+    required: false
   release-notes-path:
-    description: Path to the file containing the pending release body.
+    description: File containing the pending Gitea Release body.
     required: false
     default: RELEASE.md
-  bootstrap-sha:
-    description: Optional exclusive commit boundary for the first release scan.
+  version-file:
+    description: Existing simple release version file.
     required: false
+    default: version.txt
+  extra-files:
+    description: JSON array of additional generic, JSON, TOML, YAML, or XML version files.
+    required: false
+  exclude-paths:
+    description: JSON array of repository paths whose commits are excluded when all changed files match.
+    required: false
+  bootstrap-sha:
+    description: Exclusive commit boundary used before the first matching tag.
+    required: false
+  last-release-sha:
+    description: Explicit exclusive commit boundary for release calculation.
+    required: false
+  versioning-strategy:
+    description: default, always-bump-patch, always-bump-minor, always-bump-major, or prerelease.
+    required: false
+    default: default
+  bump-minor-pre-major:
+    description: Use a minor bump for breaking changes before 1.0.0.
+    required: false
+    default: 'false'
+  bump-patch-for-minor-pre-major:
+    description: Use a patch bump for features before 1.0.0.
+    required: false
+    default: 'false'
+  prerelease:
+    description: Create prerelease versions and mark the Gitea Release as a prerelease.
+    required: false
+    default: 'false'
+  prerelease-type:
+    description: Prerelease identifier such as beta.
+    required: false
+  draft:
+    description: Create the Gitea Release as a draft.
+    required: false
+    default: 'false'
+  draft-pull-request:
+    description: Prefix the release PR title with WIP because Gitea has no create-draft field.
+    required: false
+    default: 'false'
+  skip-gitea-release:
+    description: Skip automatic tag and Gitea Release creation.
+    required: false
+    default: 'false'
+  skip-github-release:
+    description: Google-compatible alias for skip-gitea-release.
+    required: false
+    default: 'false'
+  skip-gitea-pull-request:
+    description: Skip release pull request creation and updates.
+    required: false
+    default: 'false'
+  skip-github-pull-request:
+    description: Google-compatible alias for skip-gitea-pull-request.
+    required: false
+    default: 'false'
+  skip-labeling:
+    description: Do not create or update lifecycle labels.
+    required: false
+    default: 'false'
+  skip-changelog:
+    description: Do not update the changelog file.
+    required: false
+    default: 'false'
+  label:
+    description: Comma-separated pending release PR labels.
+    required: false
+    default: 'autorelease: pending'
+  release-label:
+    description: Comma-separated labels applied after publishing.
+    required: false
+    default: 'autorelease: tagged'
+  extra-label:
+    description: Additional comma-separated labels for release PRs.
+    required: false
+  pull-request-title-pattern:
+    description: Release PR title pattern using ${scope}, ${component}, ${version}, and ${branch?}.
+    required: false
+    default: 'chore${scope}: release${component} ${version}'
+  pull-request-header:
+    description: Text placed before release notes in the pull request body.
+    required: false
+    default: ':robot: I have created a release *beep* *boop*'
+  pull-request-footer:
+    description: Text placed after release notes in the pull request body.
+    required: false
+    default: 'This PR was generated with [Release Please](https://github.com/googleapis/release-please).'
+  signoff:
+    description: Signoff identity in Name <email@example.com> form for release commits.
+    required: false
+  changelog-sections:
+    description: JSON array defining Conventional Commit types, section names, and hidden flags.
+    required: false
+  include-commit-authors:
+    description: Include commit authors in generated changelog entries.
+    required: false
+    default: 'false'
+  date-format:
+    description: UTC release date format supporting %Y, %m, %d, and %F.
+    required: false
+    default: '%Y-%m-%d'
+  always-update:
+    description: Report an unchanged managed release PR as updated.
+    required: false
+    default: 'false'
 
 outputs:
-  pr_created:
-    description: Whether a release pull request was created.
-  pr_updated:
-    description: Whether an existing release pull request was updated.
-  pr_number:
-    description: Number of the created or updated release pull request.
   release_created:
-    description: Whether a Gitea Release was created.
+    description: Whether this run created a Gitea Release.
+  releases_created:
+    description: Whether this run created any Gitea Releases.
+  paths_released:
+    description: JSON array of released paths; either ["."] or [].
+  prs_created:
+    description: Whether a release pull request was created or updated.
+  pr:
+    description: Created or updated release pull request object.
+  prs:
+    description: JSON array containing the created or updated release pull request.
+  upload_url:
+    description: Gitea release asset upload URL.
+  html_url:
+    description: Gitea Release web URL.
   tag_name:
-    description: Tag of the created release.
+    description: Published tag name.
   version:
-    description: Full semantic version of the created release.
+    description: Published SemVer version.
   major:
-    description: Major semantic version component.
+    description: Published major version.
   minor:
-    description: Minor semantic version component.
+    description: Published minor version.
   patch:
-    description: Patch semantic version component.
+    description: Published patch version.
   sha:
-    description: Commit SHA tagged by the created release.
-  release_url:
-    description: HTML URL of the created release.
+    description: Tagged release PR merge commit.
   body:
-    description: Body of the created release.
+    description: Gitea Release body.
+  id:
+    description: Gitea Release numeric ID.
+  name:
+    description: Gitea Release display name.
+  path:
+    description: Released package path; non-root releases expose the equivalent as <path>--path.
+  prNumber:
+    description: Merged release pull request number.
+  draft:
+    description: Whether the Gitea Release is a draft.
+  pr_created:
+    description: Compatibility output indicating a release PR was created.
+  pr_updated:
+    description: Compatibility output indicating a release PR was updated.
+  pr_number:
+    description: Compatibility output containing the release PR number.
 
 runs:
   using: node24

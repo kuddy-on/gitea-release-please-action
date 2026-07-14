@@ -5,15 +5,18 @@ on:
     branches:
       - main
 
-permissions:
-  code: write
-  releases: write
-  pull-requests: write
-  issues: write
-  actions: write
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
 
 jobs:
   release-please:
+    permissions:
+      code: write
+      releases: write
+      pull-requests: write
+      issues: write
+      actions: write
     runs-on: ubuntu-latest
     steps:
       - uses: https://github.com/kuddy-on/gitea-release-please-action@v1
@@ -46,5 +49,4 @@ jobs:
             if (!response.ok) {
               throw new Error(`workflow_dispatch failed: ${response.status} ${await response.text()}`);
             }
-            console.log(`Dispatched build for ${process.env.TAG_NAME}`);
           '
