@@ -1,0 +1,50 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  code: write
+  releases: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/kuddy-on/gitea-release-please-action@v1
+        id: release
+        with:
+          token: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Dispatch build workflow
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        shell: sh
+        env:
+          GITEA_API_URL: ${{ gitea.api_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          node --input-type=module -e '
+            const url = `${process.env.GITEA_API_URL}/repos/${process.env.GITEA_REPOSITORY}/actions/workflows/build.yml/dispatches`;
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `token ${process.env.GITEA_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                ref: "main",
+                inputs: {tag_name: process.env.TAG_NAME},
+              }),
+            });
+            if (!response.ok) {
+              throw new Error(`workflow_dispatch failed: ${response.status} ${await response.text()}`);
+            }
+            console.log(`Dispatched build for ${process.env.TAG_NAME}`);
+          '

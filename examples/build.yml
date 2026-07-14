@@ -1,0 +1,19 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Release tag to build
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Build release
+        run: ./scripts/build.sh "${{ inputs.tag_name }}"

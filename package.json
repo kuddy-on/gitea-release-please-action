@@ -1,0 +1,35 @@
+{
+  "name": "gitea-release-please-action",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A Gitea-native release-please action for Conventional Commits",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --minify --source-map",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "bash scripts/integration-test.sh",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@actions/core": "^2.0.3",
+    "conventional-commits-parser": "^7.1.0",
+    "semver": "^7.8.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.0",
+    "@types/semver": "^7.7.1",
+    "@vercel/ncc": "^0.44.1",
+    "eslint": "^10.7.0",
+    "globals": "^16.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
+}

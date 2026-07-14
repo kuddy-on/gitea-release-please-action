@@ -1,0 +1,70 @@
+name: Gitea Release Please
+description: Maintain a release PR from Conventional Commits and publish Gitea tags and releases.
+author: kuddy-on
+
+inputs:
+  token:
+    description: Gitea Actions GITEA_TOKEN or personal access token with repository, pull request, issue, and release write access.
+    required: true
+  gitea-url:
+    description: Gitea server URL or API v1 URL. Defaults to the current Gitea Actions server URL.
+    required: false
+  repository:
+    description: Repository in owner/name form. Defaults to the current Gitea Actions repository.
+    required: false
+  target-branch:
+    description: Branch against which the release pull request is opened. Defaults to the repository default branch.
+    required: false
+  initial-version:
+    description: Version used for the first release when no matching tag exists.
+    required: false
+    default: 0.1.0
+  tag-prefix:
+    description: Prefix applied to semantic version tags.
+    required: false
+    default: v
+  changelog-path:
+    description: Path to the cumulative changelog file.
+    required: false
+    default: CHANGELOG.md
+  release-notes-path:
+    description: Path to the file containing the pending release body.
+    required: false
+    default: RELEASE.md
+  bootstrap-sha:
+    description: Optional exclusive commit boundary for the first release scan.
+    required: false
+
+outputs:
+  pr_created:
+    description: Whether a release pull request was created.
+  pr_updated:
+    description: Whether an existing release pull request was updated.
+  pr_number:
+    description: Number of the created or updated release pull request.
+  release_created:
+    description: Whether a Gitea Release was created.
+  tag_name:
+    description: Tag of the created release.
+  version:
+    description: Full semantic version of the created release.
+  major:
+    description: Major semantic version component.
+  minor:
+    description: Minor semantic version component.
+  patch:
+    description: Patch semantic version component.
+  sha:
+    description: Commit SHA tagged by the created release.
+  release_url:
+    description: HTML URL of the created release.
+  body:
+    description: Body of the created release.
+
+runs:
+  using: node24
+  main: dist/index.js
+
+branding:
+  icon: package
+  color: green
