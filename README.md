@@ -172,12 +172,21 @@ Release PRs support Merge Commit and Squash Merge. Rebase Merge is not supported
 | `repository` | no | current repository | Repository in `owner/name` form. |
 | `target-branch` | no | repository default | Release PR target branch. |
 | `initial-version` | no | `0.1.0` | Version of the first release. |
-| `tag-prefix` | no | `v` | Prefix for SemVer tags. |
+| `tag-prefix` | no | `v` | Prefix for SemVer tags; set to an empty string for no prefix. |
 | `changelog-path` | no | `CHANGELOG.md` | Cumulative changelog path. |
 | `release-notes-path` | no | `RELEASE.md` | Current release body path. |
 | `bootstrap-sha` | no | — | Exclusive lower commit boundary for the first scan. |
 
 Paths are repository-relative and must be different. Set `changelog-path: changelog.md` and `release-notes-path: release.md` if lowercase names are preferred.
+
+To create tags and Releases named `1.2.3` instead of `v1.2.3`, explicitly pass an empty prefix:
+
+```yaml
+- uses: https://github.com/kuddy-on/gitea-release-please-action@v1
+  with:
+    token: ${{ secrets.GITEA_TOKEN }}
+    tag-prefix: ''
+```
 
 ## Outputs
 

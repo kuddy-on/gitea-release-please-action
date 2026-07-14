@@ -5,6 +5,11 @@ readonly IMAGE="${GITEA_E2E_IMAGE:-gitea/gitea:1.27}"
 readonly PORT="${GITEA_E2E_PORT:-33000}"
 readonly CONTAINER="gitea-release-please-e2e-${$}"
 readonly ROOT_URL="http://127.0.0.1:${PORT}"
+readonly TAG_PREFIX="${GITEA_E2E_TAG_PREFIX-v}"
+readonly FIRST_TAG="${TAG_PREFIX}0.1.0"
+readonly SECOND_TAG="${TAG_PREFIX}0.1.1"
+readonly FIRST_TITLE="chore(main): release ${FIRST_TAG}"
+readonly SECOND_TITLE="chore(main): release ${SECOND_TAG}"
 WORK_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -67,6 +72,7 @@ run_action() {
     INPUT_TOKEN="${TOKEN}" \
     "INPUT_GITEA-URL=${ROOT_URL}" \
     INPUT_REPOSITORY=e2e/demo \
+    "INPUT_TAG-PREFIX=${TAG_PREFIX}" \
     GITHUB_OUTPUT="${WORK_DIR}/output" \
     node dist/index.js >"${WORK_DIR}/action.log" 2>&1; then
     grep -v '^::add-mask::' "${WORK_DIR}/action.log" >&2 || true
@@ -95,7 +101,7 @@ run_action
 pulls="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls?state=open")"
 test "$(jq 'length' <<<"${pulls}")" = '1'
-test "$(jq -r '.[0].title' <<<"${pulls}")" = 'chore(main): release v0.1.0'
+test "$(jq -r '.[0].title' <<<"${pulls}")" = "${FIRST_TITLE}"
 test "$(jq -r '.[0].number' <<<"${pulls}")" = '1'
 
 release_notes="$(curl -fsS -H "${AUTH_HEADER}" \
@@ -122,7 +128,7 @@ wait_for_mergeable 1
 curl -fsS -X POST \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
-  -d '{"Do":"squash","MergeTitleField":"chore(main): release v0.1.0","MergeMessageField":""}' \
+  -d "{\"Do\":\"squash\",\"MergeTitleField\":\"${FIRST_TITLE}\",\"MergeMessageField\":\"\"}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls/1/merge" >"${WORK_DIR}/merge.json"
 
 merge_sha="$(curl -fsS -H "${AUTH_HEADER}" \
@@ -135,10 +141,10 @@ tags="$(curl -fsS -H "${AUTH_HEADER}" "${ROOT_URL}/api/v1/repos/e2e/demo/tags")"
 releases="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/releases")"
 test "$(jq 'length' <<<"${tags}")" = '1'
-test "$(jq -r '.[0].name' <<<"${tags}")" = 'v0.1.0'
+test "$(jq -r '.[0].name' <<<"${tags}")" = "${FIRST_TAG}"
 test "$(jq -r '.[0].commit.sha' <<<"${tags}")" = "${merge_sha}"
 test "$(jq 'length' <<<"${releases}")" = '1'
-test "$(jq -r '.[0].tag_name' <<<"${releases}")" = 'v0.1.0'
+test "$(jq -r '.[0].tag_name' <<<"${releases}")" = "${FIRST_TAG}"
 test "$(jq -r '.[0].target_commitish' <<<"${releases}")" = "${merge_sha}"
 
 curl -fsS \
@@ -152,13 +158,13 @@ second_pull="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls?state=open")"
 test "$(jq 'length' <<<"${second_pull}")" = '1'
 test "$(jq -r '.[0].number' <<<"${second_pull}")" = '2'
-test "$(jq -r '.[0].title' <<<"${second_pull}")" = 'chore(main): release v0.1.1'
+test "$(jq -r '.[0].title' <<<"${second_pull}")" = "${SECOND_TITLE}"
 
 wait_for_mergeable 2
 curl -fsS -X POST \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
-  -d '{"Do":"merge","MergeTitleField":"chore(main): release v0.1.1","MergeMessageField":""}' \
+  -d "{\"Do\":\"merge\",\"MergeTitleField\":\"${SECOND_TITLE}\",\"MergeMessageField\":\"\"}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls/2/merge" >"${WORK_DIR}/second-merge.json"
 second_merge_sha="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls/2" | jq -r '.merge_commit_sha')"
@@ -169,9 +175,9 @@ tags="$(curl -fsS -H "${AUTH_HEADER}" "${ROOT_URL}/api/v1/repos/e2e/demo/tags")"
 releases="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/releases")"
 test "$(jq 'length' <<<"${tags}")" = '2'
-test "$(jq -r '.[] | select(.name == "v0.1.1") | .commit.sha' <<<"${tags}")" = "${second_merge_sha}"
+test "$(jq -r --arg tag "${SECOND_TAG}" '.[] | select(.name == $tag) | .commit.sha' <<<"${tags}")" = "${second_merge_sha}"
 test "$(jq 'length' <<<"${releases}")" = '2'
-test "$(jq -r '.[] | select(.tag_name == "v0.1.1") | .target_commitish' <<<"${releases}")" = "${second_merge_sha}"
+test "$(jq -r --arg tag "${SECOND_TAG}" '.[] | select(.tag_name == $tag) | .target_commitish' <<<"${releases}")" = "${second_merge_sha}"
 
 run_action
 test "$(curl -fsS -H "${AUTH_HEADER}" \

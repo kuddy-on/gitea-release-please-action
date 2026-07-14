@@ -27,6 +27,15 @@ function requiredInput(name: string): string {
   return core.getInput(name, { required: true }).trim();
 }
 
+function inputWithDefault(
+  name: string,
+  defaultValue: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const environmentName = `INPUT_${name.replace(/ /g, '_').toUpperCase()}`;
+  return env[environmentName]?.trim() ?? defaultValue;
+}
+
 function normalizeUrls(rawUrl: string): { apiUrl: string; webUrl: string } {
   let url: URL;
   try {
@@ -118,7 +127,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
     ...urls,
     ...parsedRepository,
     initialVersion,
-    tagPrefix: core.getInput('tag-prefix') || 'v',
+    tagPrefix: inputWithDefault('tag-prefix', 'v', env),
     changelogPath: validatePath(
       'changelog-path',
       optionalInput('changelog-path') ?? 'CHANGELOG.md',

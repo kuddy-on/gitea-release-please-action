@@ -20,7 +20,7 @@ inputs:
     required: false
     default: 0.1.0
   tag-prefix:
-    description: Prefix applied to semantic version tags.
+    description: Prefix applied to semantic version tags. Set to an empty string for tags such as 1.2.3.
     required: false
     default: v
   changelog-path:

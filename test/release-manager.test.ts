@@ -229,8 +229,13 @@ class FakeApi implements ReleaseApi {
   }
 }
 
-function manager(api: FakeApi): ReleaseManager {
-  return new ReleaseManager(api, config, logger, () => new Date('2026-07-14T00:00:00Z'));
+function manager(api: FakeApi, overrides: Partial<ActionConfig> = {}): ReleaseManager {
+  return new ReleaseManager(
+    api,
+    { ...config, ...overrides },
+    logger,
+    () => new Date('2026-07-14T00:00:00Z'),
+  );
 }
 
 describe('ReleaseManager', () => {
@@ -322,6 +327,38 @@ describe('ReleaseManager', () => {
 
     await manager(api).run();
     expect(api.pullRequests[0]?.title).toBe('chore(main): release v0.2.0');
+  });
+
+  it('creates tags and releases without a prefix', async () => {
+    const api = new FakeApi();
+    const unprefixed = { tagPrefix: '' };
+
+    await manager(api, unprefixed).run();
+    expect(api.pullRequests[0]?.title).toBe('chore(main): release 0.1.0');
+    expect(parseMarker(api.pullRequests[0]?.body ?? '')).toMatchObject({
+      version: '0.1.0',
+      tagName: '0.1.0',
+    });
+
+    api.simulateMerge();
+    const released = await manager(api, unprefixed).run();
+
+    expect(released).toMatchObject({ releaseCreated: true, tagName: '0.1.0' });
+    expect(api.tags[0]?.name).toBe('0.1.0');
+    expect(api.releases[0]?.tag_name).toBe('0.1.0');
+  });
+
+  it('increments from the latest reachable tag without a prefix', async () => {
+    const api = new FakeApi();
+    api.commits = [
+      commit('2222222222222222', 'feat: second feature'),
+      commit('1111111111111111', 'chore(main): release 0.1.0'),
+    ];
+    api.tags = [{ name: '0.1.0', commit: { sha: '1111111111111111' } }];
+
+    await manager(api, { tagPrefix: '' }).run();
+
+    expect(api.pullRequests[0]?.title).toBe('chore(main): release 0.2.0');
   });
 
   it('fails instead of moving a conflicting existing tag', async () => {
