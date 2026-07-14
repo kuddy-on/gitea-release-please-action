@@ -13,6 +13,7 @@ import type {
 } from '../src/types.js';
 
 const mergeSha = '9999999999999999999999999999999999999999';
+const targetHeadSha = '8888888888888888888888888888888888888888';
 const releaseBranch = 'release-please--branches--main';
 const changelog = '# Changelog\n\n## 1.3.0\n';
 const releaseNotes = '## 1.3.0\n\nRelease notes\n';
@@ -78,7 +79,7 @@ function releaseBody(
       version,
       tagName,
       targetBranch: 'main',
-      targetHeadSha: '8888888888888888888888888888888888888888',
+      targetHeadSha,
       changelogPath: 'CHANGELOG.md',
       releaseNotesPath: 'RELEASE.md',
       fileHashes: {
@@ -133,6 +134,19 @@ class FakePublishApi implements PublishApi {
 
   async getTextContent(path: string, ref: string) {
     return this.files.get(`${ref}:${path}`) ?? null;
+  }
+
+  async getContent(path: string, ref: string) {
+    const content = this.files.get(`${ref}:${path}`);
+    return content === undefined
+      ? null
+      : {
+          content: Buffer.from(content).toString('base64'),
+          encoding: 'base64',
+          path,
+          sha: hashContent(content),
+          type: 'file' as const,
+        };
   }
 
   async getTag(tagName: string) {
@@ -306,9 +320,22 @@ describe('PublishManager', () => {
 
     const unhashed = new FakePublishApi();
     unhashed.changedFiles.push('backdoor.txt');
+    unhashed.files.set(`${mergeSha}:backdoor.txt`, 'malicious\n');
     await expect(publish(unhashed)).rejects.toThrow(
       'files absent from its marker: backdoor.txt',
     );
+  });
+
+  it('ignores stale PR file entries unchanged from the rebuilt target head', async () => {
+    const api = new FakePublishApi();
+    api.changedFiles.push('follow-up.txt');
+    api.files.set(`${targetHeadSha}:follow-up.txt`, 'follow-up\n');
+    api.files.set(`${mergeSha}:follow-up.txt`, 'follow-up\n');
+
+    const result = await publish(api);
+
+    expect(result.releaseCreated).toBe(true);
+    expect(api.releases).toHaveLength(1);
   });
 
   it('publishes tags without a prefix when configured', async () => {
@@ -347,7 +374,7 @@ describe('PublishManager', () => {
         version: '1.3.0',
         tagName: 'v1.3.0',
         targetBranch: 'main',
-        targetHeadSha: '8888888888888888888888888888888888888888',
+        targetHeadSha,
         changelogPath: 'packages/api/CHANGELOG.md',
         releaseNotesPath: 'packages/api/RELEASE.md',
         fileHashes: {

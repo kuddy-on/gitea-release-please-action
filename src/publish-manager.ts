@@ -15,6 +15,7 @@ export type PublishApi = Pick<
   | 'deleteBranch'
   | 'editPullRequest'
   | 'getBranch'
+  | 'getContent'
   | 'getReleaseByTag'
   | 'getTag'
   | 'getTextContent'
@@ -126,9 +127,29 @@ export class PublishManager {
     }
     const markerFiles = new Set(Object.keys(marker.fileHashes));
     const changedFiles = await this.client.listPullRequestFiles(pullRequest.number);
-    const unhashed = changedFiles
+    const reportedUnhashed = changedFiles
       .map((file) => file.filename)
       .filter((path) => !markerFiles.has(path));
+    const targetHeadSha = marker.targetHeadSha;
+    const unhashed = targetHeadSha
+      ? (
+          await Promise.all(
+            reportedUnhashed.map(async (path) => {
+              const [targetContent, releaseContent] = await Promise.all([
+                this.client.getContent(path, targetHeadSha),
+                this.client.getContent(path, mergeSha),
+              ]);
+              return targetContent?.sha === releaseContent?.sha ? null : path;
+            }),
+          )
+        ).filter((path): path is string => path !== null)
+      : reportedUnhashed;
+    const staleEntries = reportedUnhashed.filter((path) => !unhashed.includes(path));
+    if (staleEntries.length > 0) {
+      this.logger.warning(
+        `Ignoring stale Gitea PR file entries unchanged from release base: ${staleEntries.join(', ')}.`,
+      );
+    }
     if (unhashed.length > 0) {
       throw new Error(
         `Release PR #${pullRequest.number} changes files absent from its marker: ${unhashed.join(', ')}.`,
