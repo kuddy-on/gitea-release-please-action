@@ -282,7 +282,7 @@ export class ReleaseManager {
   }
 
   private includeCommit(commit: RepositoryCommit): boolean {
-    if (commit.files === undefined) return this.config.path === ROOT_PROJECT_PATH;
+    if (commit.files == null) return this.config.path === ROOT_PROJECT_PATH;
     const relevantFiles = commit.files.filter((file) =>
       pathContains(this.config.path, file.filename),
     );

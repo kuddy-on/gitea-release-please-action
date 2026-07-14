@@ -474,4 +474,30 @@ fork_branch_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "${AUTH_HEADER}
   "${ROOT_URL}/api/v1/repos/e2e/path-demo/branches/release-please--branches--main")"
 test "${fork_branch_status}" = '404'
 
+# Gitea returns files:null when the commit list explicitly disables file expansion.
+# Root releases without path filtering must accept that response.
+curl -fsS \
+  -H "${AUTH_HEADER}" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"null-files-demo","auto_init":true,"default_branch":"main","readme":"Default"}' \
+  "${ROOT_URL}/api/v1/user/repos" >"${WORK_DIR}/null-files-repository.json"
+curl -fsS \
+  -H "${AUTH_HEADER}" \
+  -H 'Content-Type: application/json' \
+  -d '{"branch":"main","message":"chore: add release manifest","content":"e30K"}' \
+  "${ROOT_URL}/api/v1/repos/e2e/null-files-demo/contents/.release-please-manifest.json" >"${WORK_DIR}/null-files-manifest.json"
+curl -fsS \
+  -H "${AUTH_HEADER}" \
+  -H 'Content-Type: application/json' \
+  -d '{"branch":"main","message":"feat: support null commit files","content":"ZmVhdHVyZQo="}' \
+  "${ROOT_URL}/api/v1/repos/e2e/null-files-demo/contents/feature.txt" >"${WORK_DIR}/null-files-feature.json"
+null_file_commits="$(curl -fsS -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/null-files-demo/commits?sha=main&stat=false&verification=false&files=false")"
+test "$(jq 'all(.[]; .files == null)' <<<"${null_file_commits}")" = 'true'
+run_action e2e/null-files-demo . false '[]' '[]'
+test "$(output_value "${WORK_DIR}/action-output" pr_created)" = 'true'
+null_files_pull="$(curl -fsS -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/null-files-demo/pulls?state=open")"
+test "$(jq -r '.[0].title' <<<"${null_files_pull}")" = "${FIRST_TITLE}"
+
 echo 'Gitea 1.27 integration test passed.'

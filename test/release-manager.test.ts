@@ -338,6 +338,18 @@ describe('ReleaseManager', () => {
     });
   });
 
+  it('accepts null commit files when root releases do not request file filtering', async () => {
+    const api = new FakeApi();
+    const firstCommit = api.commits[0];
+    if (!firstCommit) throw new Error('Missing test commit');
+    firstCommit.files = null;
+
+    await expect(manager(api).run()).resolves.toMatchObject({
+      prCreated: true,
+      prUpdated: false,
+    });
+  });
+
   it('requires a valid manifest and a matching reachable release tag', async () => {
     const missing = new FakeApi();
     missing.files.get('main')?.delete('.release-please-manifest.json');
