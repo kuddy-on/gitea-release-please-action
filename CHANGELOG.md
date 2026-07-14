@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.0...v2.0.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* tolerate null commit file lists ([#8](https://github.com/kuddy-on/gitea-release-please-action/issues/8)) ([2fdd881](https://github.com/kuddy-on/gitea-release-please-action/commit/2fdd8810d4ad5f58904d8c95b706a3ac66288049))
+
 ## [2.0.0](https://github.com/kuddy-on/gitea-release-please-action/compare/v1.1.1...v2.0.0) (2026-07-14)
 
 
