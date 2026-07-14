@@ -27,7 +27,7 @@ jobs:
       actions: write # only needed for workflow_dispatch below
     runs-on: ubuntu-latest
     steps:
-      - uses: https://github.com/kuddy-on/gitea-release-please-action@v1
+      - uses: https://github.com/kuddy-on/gitea-release-please-action@v2
         id: release
         with:
           token: ${{ secrets.GITEA_TOKEN }}
@@ -51,21 +51,30 @@ jobs:
           '
 ```
 
-For an action mirrored on the same Gitea instance, use `owner/gitea-release-please-action@v1`.
+For an action mirrored on the same Gitea instance, use `owner/gitea-release-please-action@v2`.
+
+Add `.release-please-manifest.json` before the first run. An empty object bootstraps a new package; an existing project must record its latest released version:
+
+```json
+{
+  ".": "1.2.3"
+}
+```
 
 Each invocation performs the two Google-style phases in order:
 
 1. Find a merged, pending Release PR and create its tag and Gitea Release.
-2. Recalculate changes after the latest reachable release tag and create or update the next Release PR.
+2. Read the manifest, recalculate changes after its matching release tag, and create or update the next Release PR.
 
 Merging the Release PR creates a `push` on `main`; that push starts the action and publishes the release immediately. No separate publish action or PR-number input is required.
 
 ## Release PR behavior
 
-The action parses Conventional Commits since the latest reachable SemVer tag. `feat` produces a minor bump, `fix`, `perf`, `deps`, and `revert` produce a patch, and `!` or `BREAKING CHANGE:` produces a major bump. Before 1.0, the two pre-major bump options can alter this behavior.
+The action parses Conventional Commits since the Tag recorded by `.release-please-manifest.json`. `feat` produces a minor bump, `fix`, `perf`, `deps`, and `revert` produce a patch, and `!` or `BREAKING CHANGE:` produces a major bump. Before 1.0, the two pre-major bump options can alter this behavior. A manifest version must have a matching reachable Tag; an empty manifest is accepted only when no release Tags exist.
 
-The first release defaults to `1.0.0`. The `simple` strategy requires an existing `version.txt` inside the configured package path; the Release PR updates it together with:
+The first release defaults to `1.0.0` when the manifest has no package entry. The Release PR updates:
 
+- `.release-please-manifest.json`, recording the pending package version;
 - `CHANGELOG.md`, containing cumulative release history;
 - `RELEASE.md`, containing the next Gitea Release body;
 - configured `extra-files`.
@@ -82,18 +91,21 @@ END_COMMIT_OVERRIDE
 
 ## Configuration
 
-Inputs can configure the action directly. For a reusable Release Please configuration, pass `config-file: release-please-config.json`. Flat configuration and exactly one `packages` entry are accepted:
+Inputs can configure the action directly. `manifest-file` defaults to `.release-please-manifest.json`. For a reusable Release Please configuration, pass `config-file: release-please-config.json`. Flat configuration and exactly one `packages` entry are accepted:
 
 ```json
 {
-  "release-type": "simple",
-  "initial-version": "1.0.0",
-  "include-v-in-tag": false,
-  "version-file": "version.txt",
-  "extra-files": [
-    {"type": "json", "path": "package.json", "jsonpath": "$.version"},
-    {"type": "toml", "path": "pyproject.toml", "jsonpath": "$.project.version"}
-  ]
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "initial-version": "1.0.0",
+      "include-v-in-tag": false,
+      "extra-files": [
+        {"type": "json", "path": "package.json", "jsonpath": "$.version"},
+        {"type": "toml", "path": "pyproject.toml", "jsonpath": "$.project.version"}
+      ]
+    }
+  }
 }
 ```
 
@@ -107,7 +119,7 @@ with:
   path: services/api
 ```
 
-Only commits touching `services/api` participate in version calculation. `CHANGELOG.md`, `RELEASE.md`, `version.txt`, and `extra-files` paths are relative to that directory. The equivalent repository configuration is:
+Only commits touching `services/api` participate in version calculation. `CHANGELOG.md`, `RELEASE.md`, and `extra-files` paths are relative to that directory; the manifest remains at the repository-relative `manifest-file` location and uses the key `services/api`. The equivalent repository configuration is:
 
 ```json
 {
@@ -119,6 +131,14 @@ Only commits touching `services/api` participate in version calculation. `CHANGE
       ]
     }
   }
+}
+```
+
+The matching manifest is:
+
+```json
+{
+  "services/api": "1.2.3"
 }
 ```
 
@@ -149,7 +169,11 @@ Every matched file must exist and every selector or generic marker must match. A
 
 ## Publishing and security
 
-Publishing requires all of the following: a closed and merged PR, the action's machine-readable marker, the pending lifecycle label, the expected machine branch and source repository, matching generated-file hashes at the merge commit, and a non-conflicting tag. The action tags the Release PR merge SHA, creates the Gitea Release from `RELEASE.md`, changes `autorelease: pending` to `autorelease: tagged`, and deletes the machine branch. Reruns are idempotent and can repair a missing Release when the correct tag already exists.
+Publishing requires all of the following: a closed and merged PR, the action's machine-readable marker, the pending lifecycle label, the expected machine branch and source repository, a manifest entry matching the pending version, matching generated-file hashes at the merge commit, and a non-conflicting tag. The action tags the Release PR merge SHA, creates the Gitea Release from `RELEASE.md`, changes `autorelease: pending` to `autorelease: tagged`, and deletes the machine branch. Reruns are idempotent and can repair a missing Release when the correct tag already exists.
+
+### Migrating from v1
+
+Version 2 replaces the mandatory `version.txt` contract with the standard manifest. Before changing `@v1` to `@v2`, create `.release-please-manifest.json` with the version of the latest reachable Tag, remove `version-file`, and keep real package versions under `extra-files`. For example, migrate Tag `v1.2.3` with `{ ".": "1.2.3" }`. A mismatch stops the action rather than guessing a release boundary.
 
 `skip-gitea-release` leaves publication to an external process. Until a matching tag exists, the merged pending PR intentionally blocks creation of another Release PR.
 
@@ -167,9 +191,9 @@ As in Google's Action, a non-root package prefixes release-specific outputs with
 
 ## Compatibility boundary
 
-Supported Google behavior includes the standard push trigger, one continuously updated Release PR, automatic publication after every Gitea merge method, a root or non-root package path, Conventional Commit/Release-As calculation, changelog customization, versioning strategies, labels, draft/prerelease releases, extra files and globs, repository config, fork PRs, explicit proxies, and action outputs.
+Supported Google behavior includes the standard push trigger, a single-package Release Please manifest, one continuously updated Release PR, automatic publication after every Gitea merge method, a root or non-root package path, Conventional Commit/Release-As calculation, changelog customization, versioning strategies, labels, draft/prerelease releases, extra files and globs, repository config, fork PRs, explicit proxies, and action outputs.
 
-Not supported: manifest monorepos, multiple components or simultaneous versions, language/platform-specific release types, and their plugins. `changelog-type: github` has no Gitea 1.27 equivalent because Gitea does not expose GitHub's generated-release-notes API; use the default Conventional Commit changelog.
+Not supported: multiple manifest packages, multiple components or simultaneous versions, language/platform-specific release types, and their plugins. `changelog-type: github` has no Gitea 1.27 equivalent because Gitea does not expose GitHub's generated-release-notes API; use the default Conventional Commit changelog.
 
 ## Development
 

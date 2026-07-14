@@ -7,6 +7,7 @@ export interface ActionConfig {
   owner: string;
   repo: string;
   configFile?: string;
+  manifestFile: string;
   targetBranch?: string;
   path: string;
   releaseType: 'simple';
@@ -16,7 +17,6 @@ export interface ActionConfig {
   changelogPath: string;
   changelogHost: string;
   releaseNotesPath: string;
-  versionFile: string;
   extraFiles: ExtraFile[];
   excludePaths: string[];
   bootstrapSha?: string;
@@ -196,7 +196,7 @@ export interface ReleaseCandidate {
 }
 
 export interface ReleaseMarker {
-  schema: 1;
+  schema: 1 | 2;
   path?: string;
   version: string;
   tagName: string;
@@ -204,6 +204,7 @@ export interface ReleaseMarker {
   targetHeadSha?: string;
   changelogPath?: string;
   releaseNotesPath: string;
+  manifestPath?: string;
   fileHashes: Record<string, string>;
 }
 

@@ -9,16 +9,18 @@ import {
 import type { ReleaseMarker } from '../src/types.js';
 
 const marker: ReleaseMarker = {
-  schema: 1,
+  schema: 2,
   version: '0.1.0',
   tagName: 'v0.1.0',
   targetBranch: 'main',
   targetHeadSha: '1111111111111111',
   changelogPath: 'CHANGELOG.md',
   releaseNotesPath: 'RELEASE.md',
+  manifestPath: '.release-please-manifest.json',
   fileHashes: {
     'CHANGELOG.md': hashContent('changelog'),
     'RELEASE.md': hashContent('notes'),
+    '.release-please-manifest.json': hashContent('{".":"0.1.0"}\n'),
   },
 };
 
@@ -32,8 +34,14 @@ describe('release PR marker', () => {
   });
 
   it('accepts markers created before target head tracking was added', () => {
-    const legacyMarker = { ...marker };
+    const legacyMarker: ReleaseMarker = {
+      ...marker,
+      schema: 1,
+      fileHashes: { ...marker.fileHashes },
+    };
     delete legacyMarker.targetHeadSha;
+    delete legacyMarker.manifestPath;
+    delete legacyMarker.fileHashes['.release-please-manifest.json'];
 
     expect(parseMarker(serializeMarker(legacyMarker))).toEqual(legacyMarker);
   });
@@ -44,6 +52,9 @@ describe('release PR marker', () => {
     expect(
       parseMarker('<!-- gitea-release-please: {"schema":1,"version":"1.0.0"} -->'),
     ).toBeNull();
+    const missingManifest = { ...marker };
+    delete missingManifest.manifestPath;
+    expect(parseMarker(serializeMarker(missingManifest))).toBeNull();
     expect(
       parseMarker(
         serializeMarker({

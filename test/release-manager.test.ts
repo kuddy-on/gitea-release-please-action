@@ -22,6 +22,7 @@ const config: ActionConfig = {
   fork: false,
   owner: 'acme',
   repo: 'demo',
+  manifestFile: '.release-please-manifest.json',
   targetBranch: 'main',
   path: '.',
   releaseType: 'simple',
@@ -31,7 +32,6 @@ const config: ActionConfig = {
   changelogPath: 'CHANGELOG.md',
   changelogHost: 'https://gitea.example',
   releaseNotesPath: 'RELEASE.md',
-  versionFile: 'version.txt',
   extraFiles: [],
   excludePaths: [],
   versioningStrategy: 'default',
@@ -94,7 +94,15 @@ class FakeApi implements ReleaseApi {
     ],
   ]);
   files = new Map<string, Map<string, StoredFile>>([
-    ['main', new Map([['version.txt', { content: '0.0.0\n', sha: 'version-file' }]])],
+    [
+      'main',
+      new Map([
+        [
+          '.release-please-manifest.json',
+          { content: '{}\n', sha: 'release-manifest' },
+        ],
+      ]),
+    ],
   ]);
   branchParents = new Map<string, string>();
   changeFilesCalls: Array<Parameters<ReleaseApi['changeFiles']>[0]> = [];
@@ -312,12 +320,59 @@ describe('ReleaseManager', () => {
     });
     expect(api.lastChangeFiles?.forcePush).toBeUndefined();
     expect(api.lastChangeFiles?.files).toHaveLength(3);
+    expect(
+      JSON.parse(
+        (await api.getTextContent(
+          '.release-please-manifest.json',
+          'release-please--branches--main',
+        )) ?? '',
+      ),
+    ).toEqual({ '.': '0.1.0' });
     const pullRequest = api.pullRequests[0];
     expect(pullRequest?.title).toBe('chore(main): release 0.1.0');
     expect(parseMarker(pullRequest?.body ?? '')).toMatchObject({
+      schema: 2,
       version: '0.1.0',
       targetBranch: 'main',
+      manifestPath: '.release-please-manifest.json',
     });
+  });
+
+  it('requires a valid manifest and a matching reachable release tag', async () => {
+    const missing = new FakeApi();
+    missing.files.get('main')?.delete('.release-please-manifest.json');
+    await expect(manager(missing).run()).rejects.toThrow(
+      'Manifest file .release-please-manifest.json does not exist',
+    );
+
+    const missingEntry = new FakeApi();
+    missingEntry.tags = [
+      { name: 'v0.1.0', commit: { sha: '1111111111111111' } },
+    ];
+    await expect(manager(missingEntry).run()).rejects.toThrow(
+      'has no . entry, but release tags already exist',
+    );
+
+    const missingTag = new FakeApi();
+    missingTag.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{".":"0.1.0"}\n',
+      sha: 'release-manifest',
+    });
+    await expect(manager(missingTag).run()).rejects.toThrow(
+      'expects release tag v0.1.0, but it does not exist',
+    );
+
+    const unreachable = new FakeApi();
+    unreachable.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{".":"0.1.0"}\n',
+      sha: 'release-manifest',
+    });
+    unreachable.tags = [
+      { name: 'v0.1.0', commit: { sha: '9999999999999999' } },
+    ];
+    await expect(manager(unreachable).run()).rejects.toThrow(
+      'Manifest release tag v0.1.0 is not reachable from main',
+    );
   });
 
   it('updates the same PR when another releasable commit reaches main', async () => {
@@ -390,6 +445,10 @@ describe('ReleaseManager', () => {
       commit('1111111111111111', 'chore(main): release v1.2.3'),
     ];
     api.tags = [{ name: 'v1.2.3', commit: { sha: '1111111111111111' } }];
+    api.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{".":"1.2.3"}\n',
+      sha: 'release-manifest',
+    });
     api.branches.set('main', {
       name: 'main',
       commit: { id: '2222222222222222', message: 'fix: repair cache' },
@@ -488,7 +547,7 @@ describe('ReleaseManager', () => {
       expect.objectContaining({
         'CHANGELOG.md': expect.any(String),
         'RELEASE.md': expect.any(String),
-        'version.txt': expect.any(String),
+        '.release-please-manifest.json': expect.any(String),
         'package.json': expect.any(String),
         'pyproject.toml': expect.any(String),
       }),
@@ -523,6 +582,10 @@ describe('ReleaseManager', () => {
       commit('1111111111111111', 'chore(main): release v0.1.0'),
     ];
     api.tags = [{ name: 'v0.1.0', commit: { sha: '1111111111111111' } }];
+    api.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{".":"0.1.0"}\n',
+      sha: 'release-manifest',
+    });
     api.files.get('main')?.set('CHANGELOG.md', {
       content: '# Changelog\n\n## 0.1.0\n\nInitial release\n',
       sha: 'old-changelog',
@@ -552,6 +615,10 @@ describe('ReleaseManager', () => {
       commit('1111111111111111', 'chore(main): release 0.1.0'),
     ];
     api.tags = [{ name: '0.1.0', commit: { sha: '1111111111111111' } }];
+    api.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{".":"0.1.0"}\n',
+      sha: 'release-manifest',
+    });
 
     await manager(api, { tagPrefix: '' }).run();
 
@@ -580,13 +647,12 @@ describe('ReleaseManager', () => {
     const packageFix = commit('2222222222222222', 'fix: repair package API');
     packageFix.files = [{ filename: 'packages/api/src/api.ts' }];
     const previousRelease = commit('1111111111111111', 'chore(main): release 1.0.0');
-    previousRelease.files = [{ filename: 'packages/api/version.txt' }];
+    previousRelease.files = [{ filename: '.release-please-manifest.json' }];
     api.commits = [unrelated, packageFix, previousRelease];
     api.tags = [{ name: 'v1.0.0', commit: { sha: previousRelease.sha } }];
-    api.files.get('main')?.delete('version.txt');
-    api.files.get('main')?.set('packages/api/version.txt', {
-      content: '1.0.0\n',
-      sha: 'package-version',
+    api.files.get('main')?.set('.release-please-manifest.json', {
+      content: '{"packages/api":"1.0.0"}\n',
+      sha: 'release-manifest',
     });
     api.files.get('main')?.set('packages/api/package.json', {
       content: '{"name":"api","version":"1.0.0"}\n',
@@ -600,16 +666,17 @@ describe('ReleaseManager', () => {
 
     expect(api.pullRequests[0]?.title).toBe('chore(main): release 1.0.1');
     expect(api.lastChangeFiles?.files.map((file) => file.path).sort()).toEqual([
+      '.release-please-manifest.json',
       'packages/api/CHANGELOG.md',
       'packages/api/RELEASE.md',
       'packages/api/package.json',
-      'packages/api/version.txt',
     ]);
     const marker = parseMarker(api.pullRequests[0]?.body ?? '');
     expect(marker).toMatchObject({
       path: 'packages/api',
       changelogPath: 'packages/api/CHANGELOG.md',
       releaseNotesPath: 'packages/api/RELEASE.md',
+      manifestPath: '.release-please-manifest.json',
     });
     const notes = await api.getTextContent(
       'packages/api/RELEASE.md',

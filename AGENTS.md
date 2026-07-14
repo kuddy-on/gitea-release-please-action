@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Runtime code lives in `src/`. `src/index.ts` is the single action entry point and `gitea-client.ts` wraps the Gitea REST API. Keep release-PR orchestration in `ReleaseManager` and post-merge tag/Release orchestration in `PublishManager`; Conventional Commit parsing, versioning, Markdown generation, markers, configuration, and shared types belong in focused sibling modules.
+Runtime code lives in `src/`. `src/index.ts` is the single action entry point and `gitea-client.ts` wraps the Gitea REST API. Keep release-PR orchestration in `ReleaseManager` and post-merge tag/Release orchestration in `PublishManager`; manifest parsing, Conventional Commit parsing, versioning, Markdown generation, markers, configuration, and shared types belong in focused sibling modules.
 
 Unit tests live in `test/` and mirror source modules, for example `test/conventional.test.ts`. `action.yml` defines the public interface, and the committed runner-ready bundle is stored in `dist/`. Usage examples are in `examples/`; the Docker lifecycle test is `scripts/integration-test.sh`; repository CI is under `.github/workflows/`.
 
