@@ -1,6 +1,6 @@
 {
   "name": "gitea-release-please-action",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "A Gitea-native release-please action for Conventional Commits",
   "type": "module",
