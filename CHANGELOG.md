@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.1...v2.0.2) (2026-07-17)
+
+
+### Bug Fixes
+
+* link release PR footer to this action ([#10](https://github.com/kuddy-on/gitea-release-please-action/issues/10)) ([8c00879](https://github.com/kuddy-on/gitea-release-please-action/commit/8c0087994901598433e286f31723b4d563dbbe57))
+
 ## [2.0.1](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.0...v2.0.1) (2026-07-14)
 
 
