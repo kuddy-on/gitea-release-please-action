@@ -385,7 +385,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
       optionalInput('pull-request-header') ?? ':robot: I have created a release *beep* *boop*',
     pullRequestFooter:
       optionalInput('pull-request-footer') ??
-      'This PR was generated with [Release Please](https://github.com/googleapis/release-please).',
+      'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).',
     changelogSections: parseChangelogSections(optionalInput('changelog-sections')),
     includeCommitAuthors: booleanInput('include-commit-authors', false, env),
     dateFormat: optionalInput('date-format') ?? '%Y-%m-%d',

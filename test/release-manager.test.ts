@@ -49,7 +49,8 @@ const config: ActionConfig = {
   extraLabels: [],
   pullRequestTitlePattern: 'chore${scope}: release${component} ${version}',
   pullRequestHeader: ':robot: I have created a release *beep* *boop*',
-  pullRequestFooter: 'This PR was generated with Release Please.',
+  pullRequestFooter:
+    'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).',
   changelogSections: [
     { type: 'feat', section: 'Features' },
     { type: 'fix', section: 'Bug Fixes' },

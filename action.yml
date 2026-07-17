@@ -154,7 +154,7 @@ inputs:
   pull-request-footer:
     description: Text placed after release notes in the pull request body.
     required: false
-    default: 'This PR was generated with [Release Please](https://github.com/googleapis/release-please).'
+    default: 'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).'
   signoff:
     description: Signoff identity in Name <email@example.com> form for release commits.
     required: false
