@@ -29,7 +29,7 @@ describe('release PR marker', () => {
     const body = buildPullRequestBody(marker, '# v0.1.0\n\nNotes\n');
     expect(parseMarker(body)).toEqual(marker);
     expect(body).toContain(
-      'This PR was generated with [Release Please](https://github.com/googleapis/release-please).',
+      'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).',
     );
   });
 

@@ -72,7 +72,7 @@ export function buildPullRequestBody(
   marker: ReleaseMarker,
   releaseNotes: string,
   header = ':robot: I have created a release *beep* *boop*',
-  footer = 'This PR was generated with [Release Please](https://github.com/googleapis/release-please).',
+  footer = 'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).',
 ): string {
   return `${header.trim()}\n---\n\n${releaseNotes.trim()}\n\n---\n${footer.trim()}\n\n${serializeMarker(marker)}`;
 }
