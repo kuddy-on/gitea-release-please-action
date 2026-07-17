@@ -66,4 +66,18 @@ describe('Conventional Commit parsing', () => {
       }),
     ]);
   });
+
+  it('captures and deduplicates local and cross-repository issue references', () => {
+    const changes = parseChanges([
+      commit(
+        'fix: repair cache (#12)\n\nCloses #12, other/service#34',
+        '7777777',
+      ),
+    ]);
+
+    expect(changes[0]?.issueReferences).toEqual([
+      { number: '12' },
+      { number: '34', owner: 'other', repository: 'service' },
+    ]);
+  });
 });
