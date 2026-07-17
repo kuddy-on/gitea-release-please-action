@@ -170,6 +170,12 @@ export type ChangeFileOperation = {
   sha?: string;
 };
 
+export interface IssueReference {
+  number: string;
+  owner?: string;
+  repository?: string;
+}
+
 export interface ParsedChange {
   sha: string;
   url: string;
@@ -181,6 +187,7 @@ export interface ParsedChange {
   hidden?: boolean;
   releaseAs?: string;
   author?: string;
+  issueReferences?: IssueReference[];
 }
 
 export type VersionBump = 'major' | 'minor' | 'patch';

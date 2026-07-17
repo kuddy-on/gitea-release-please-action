@@ -1,4 +1,4 @@
-import type { ChangelogSection, ParsedChange } from './types.js';
+import type { ChangelogSection, IssueReference, ParsedChange } from './types.js';
 
 interface ReleaseMarkdownOptions {
   version: string;
@@ -26,18 +26,85 @@ function escapeMarkdown(value: string): string {
     .replace(/[\r\n]+/g, ' ');
 }
 
-function changeLine(change: ParsedChange, includeCommitAuthors: boolean): string {
+function issueLabel(reference: IssueReference): string {
+  const repository = reference.repository
+    ? `${reference.owner ? `${reference.owner}/` : ''}${reference.repository}`
+    : '';
+  return `${repository}#${reference.number}`;
+}
+
+function issueUrl(
+  reference: IssueReference,
+  options: Pick<ReleaseMarkdownOptions, 'webUrl' | 'owner' | 'repo'>,
+): string {
+  const owner = reference.owner ?? options.owner;
+  const repo = reference.repository ?? options.repo;
+  return `${options.webUrl}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(reference.number)}`;
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function linkIssueReferences(
+  value: string,
+  references: IssueReference[] | undefined,
+  options: Pick<ReleaseMarkdownOptions, 'webUrl' | 'owner' | 'repo'>,
+): string {
+  if (!references || references.length === 0) return escapeMarkdown(value);
+
+  const byLabel = new Map(references.map((reference) => [issueLabel(reference), reference]));
+  const labels = [...byLabel.keys()];
+  const matchLabels = [...labels].sort((left, right) => right.length - left.length);
+  const pattern = new RegExp(
+    `(?<![\\w./-])(?:${matchLabels.map(escapeRegularExpression).join('|')})(?![\\w-])`,
+    'g',
+  );
+  const linked = new Set<string>();
+  let result = '';
+  let start = 0;
+
+  for (const match of value.matchAll(pattern)) {
+    const label = match[0];
+    const index = match.index;
+    const reference = byLabel.get(label);
+    if (!reference) continue;
+    result += escapeMarkdown(value.slice(start, index));
+    result += `[${escapeMarkdown(label)}](${issueUrl(reference, options)})`;
+    linked.add(label);
+    start = index + label.length;
+  }
+
+  result += escapeMarkdown(value.slice(start));
+  const unlinked = labels
+    .filter((label) => !linked.has(label))
+    .map((label) => {
+      const reference = byLabel.get(label);
+      if (!reference) return '';
+      return `([${escapeMarkdown(label)}](${issueUrl(reference, options)}))`;
+    })
+    .filter(Boolean);
+  return [result, ...unlinked].filter(Boolean).join(' ');
+}
+
+function changeLine(
+  change: ParsedChange,
+  includeCommitAuthors: boolean,
+  options: Pick<ReleaseMarkdownOptions, 'webUrl' | 'owner' | 'repo'>,
+): string {
   const scope = change.scope ? `**${escapeMarkdown(change.scope)}:** ` : '';
   const author = includeCommitAuthors && change.author
     ? ` (@${escapeMarkdown(change.author.replace(/^@/, ''))})`
     : '';
-  return `* ${scope}${escapeMarkdown(change.subject)}${author} ([${change.sha.slice(0, 7)}](${change.url}))`;
+  const subject = linkIssueReferences(change.subject, change.issueReferences, options);
+  return `* ${scope}${subject}${author} ([${change.sha.slice(0, 7)}](${change.url}))`;
 }
 
 function sections(
   changes: ParsedChange[],
   changelogSections: ChangelogSection[],
   includeCommitAuthors: boolean,
+  options: Pick<ReleaseMarkdownOptions, 'webUrl' | 'owner' | 'repo'>,
 ): string {
   const breaking = changes.filter(
     (change) => change.breaking && change.breakingNotes.length > 0,
@@ -47,7 +114,8 @@ function sections(
     : `### ⚠ BREAKING CHANGES\n\n${breaking
         .flatMap((change) =>
           change.breakingNotes.map(
-            (note) => `* ${escapeMarkdown(note)} ([${change.sha.slice(0, 7)}](${change.url}))`,
+            (note) =>
+              `* ${linkIssueReferences(note, change.issueReferences, options)} ([${change.sha.slice(0, 7)}](${change.url}))`,
           ),
         )
         .join('\n')}`;
@@ -58,7 +126,7 @@ function sections(
     );
     if (matching.length === 0) return '';
     return `### ${group.section}\n\n${matching
-      .map((change) => changeLine(change, includeCommitAuthors))
+      .map((change) => changeLine(change, includeCommitAuthors, options))
       .join('\n')}`;
   })
     .filter(Boolean)
@@ -91,6 +159,7 @@ export function generateReleaseMarkdown(options: ReleaseMarkdownOptions): Genera
     options.changes,
     options.changelogSections,
     options.includeCommitAuthors,
+    options,
   );
   const fullChangelog = `**Full Changelog**: [${
     options.previousTag ? `${options.previousTag}...${options.tagName}` : options.tagName

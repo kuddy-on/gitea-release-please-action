@@ -2,6 +2,7 @@ import { CommitParser } from 'conventional-commits-parser';
 
 import type {
   ChangelogSection,
+  IssueReference,
   ParsedChange,
   RepositoryCommit,
   VersionBump,
@@ -27,6 +28,28 @@ const BUMP_RANK: Readonly<Record<VersionBump, number>> = {
   minor: 2,
   major: 3,
 };
+
+function issueReferences(
+  references: ReturnType<CommitParser['parse']>['references'],
+): IssueReference[] {
+  const seen = new Set<string>();
+  const issues: IssueReference[] = [];
+
+  for (const reference of references) {
+    if (!/^\d+$/.test(reference.issue)) continue;
+    const key = `${reference.owner ?? ''}/${reference.repository ?? ''}#${reference.issue}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    issues.push({
+      number: reference.issue,
+      ...(reference.owner ? { owner: reference.owner } : {}),
+      ...(reference.repository ? { repository: reference.repository } : {}),
+    });
+  }
+
+  return issues;
+}
 
 export function parseChanges(
   commits: RepositoryCommit[],
@@ -58,6 +81,7 @@ export function parseChanges(
     }
 
     const author = commit.author?.username ?? commit.author?.full_name;
+    const references = issueReferences(parsed.references);
 
     const change: ParsedChange = {
       sha: commit.sha,
@@ -71,6 +95,7 @@ export function parseChanges(
     if (hidden) change.hidden = true;
     if (releaseAs) change.releaseAs = releaseAs;
     if (author) change.author = author;
+    if (references.length > 0) change.issueReferences = references;
     changes.push(change);
   }
 

@@ -79,4 +79,38 @@ describe('release markdown', () => {
       'https://gitea.example/root/acme/demo/commits/v0.1.0',
     );
   });
+
+  it('links issue references found in subjects and commit footers', () => {
+    const generated = generateReleaseMarkdown({
+      version: '1.2.1',
+      tagName: 'v1.2.1',
+      previousTag: 'v1.2.0',
+      date: '2026-07-17',
+      webUrl: 'https://gitea.example',
+      owner: 'acme',
+      repo: 'demo',
+      changelogSections: [{ type: 'fix', section: 'Bug Fixes' }],
+      includeCommitAuthors: false,
+      changes: [
+        {
+          sha: '1234567890',
+          url: 'https://gitea.example/acme/demo/commit/1234567890',
+          type: 'fix',
+          scope: null,
+          subject: 'repair cache (#12)',
+          breaking: false,
+          breakingNotes: [],
+          issueReferences: [
+            { number: '12' },
+            { number: '34', owner: 'other', repository: 'service' },
+          ],
+        },
+      ],
+    });
+
+    expect(generated.releaseNotes).toContain(
+      'repair cache ([#12](https://gitea.example/acme/demo/issues/12)) ' +
+        '([other/service#34](https://gitea.example/other/service/issues/34))',
+    );
+  });
 });
