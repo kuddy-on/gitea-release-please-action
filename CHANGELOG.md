@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.3...v2.0.4) (2026-07-18)
+
+
+### Bug Fixes
+
+* normalize changelog metadata and drop release notes file ([#14](https://github.com/kuddy-on/gitea-release-please-action/issues/14)) ([b07a4e2](https://github.com/kuddy-on/gitea-release-please-action/commit/b07a4e231865d318d1d373d991edd89ee1824945))
+
 ## [2.0.3](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.2...v2.0.3) (2026-07-17)
 
 
