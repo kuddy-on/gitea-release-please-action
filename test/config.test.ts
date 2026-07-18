@@ -9,6 +9,7 @@ const INPUT_NAMES = [
   'INPUT_PATH',
   'INPUT_MANIFEST-FILE',
   'INPUT_VERSION-FILE',
+  'INPUT_RELEASE-NOTES-PATH',
   'INPUT_PROXY-SERVER',
   'INPUT_TAG-PREFIX',
   'INPUT_INCLUDE-V-IN-TAG',
@@ -28,6 +29,7 @@ describe('action configuration', () => {
     delete process.env.INPUT_PATH;
     delete process.env['INPUT_MANIFEST-FILE'];
     delete process.env['INPUT_VERSION-FILE'];
+    delete process.env['INPUT_RELEASE-NOTES-PATH'];
     delete process.env['INPUT_PROXY-SERVER'];
     delete process.env['INPUT_INCLUDE-V-IN-TAG'];
     delete process.env['INPUT_EXTRA-FILES'];
@@ -113,6 +115,18 @@ describe('action configuration', () => {
   it('rejects the removed version-file setting with migration guidance', () => {
     process.env['INPUT_VERSION-FILE'] = 'version.txt';
     expect(() => loadConfig()).toThrow('use manifest-file and extra-files');
+  });
+
+  it('accepts the deprecated release-notes-path setting without generating a file', () => {
+    process.env['INPUT_RELEASE-NOTES-PATH'] = 'NOTES.md';
+    const configured = loadConfig();
+
+    expect(configured).not.toHaveProperty('releaseNotesPath');
+    expect(
+      applyRepositoryConfig(configured, JSON.stringify({
+        'release-notes-path': 'RELEASE.md',
+      })),
+    ).not.toHaveProperty('releaseNotesPath');
   });
 
   it('loads official root package configuration while retaining action defaults', () => {

@@ -16,7 +16,6 @@ export interface ActionConfig {
   includeVInReleaseName: boolean;
   changelogPath: string;
   changelogHost: string;
-  releaseNotesPath: string;
   extraFiles: ExtraFile[];
   excludePaths: string[];
   bootstrapSha?: string;
@@ -203,14 +202,15 @@ export interface ReleaseCandidate {
 }
 
 export interface ReleaseMarker {
-  schema: 1 | 2;
+  schema: 1 | 2 | 3;
   path?: string;
   version: string;
   tagName: string;
   targetBranch: string;
   targetHeadSha?: string;
   changelogPath?: string;
-  releaseNotesPath: string;
+  releaseNotesPath?: string;
+  releaseNotesHash?: string;
   manifestPath?: string;
   fileHashes: Record<string, string>;
 }

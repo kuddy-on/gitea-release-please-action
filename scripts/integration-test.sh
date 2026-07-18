@@ -213,10 +213,12 @@ first_release_head="$(curl -fsS -H "${AUTH_HEADER}" \
   jq -r '.commit.id')"
 test -n "${first_release_head}"
 
-release_notes="$(curl -fsS -H "${AUTH_HEADER}" \
+release_notes="$(read_file CHANGELOG.md release-please--branches--main)"
+grep -q 'initial feature' <<<"${release_notes}"
+release_notes_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/contents/RELEASE.md?ref=release-please--branches--main")"
-jq -r '.content' <<<"${release_notes}" | tr -d '\n' | base64 -d | grep -q 'initial feature'
-if jq -r '.content' <<<"${release_notes}" | tr -d '\n' | base64 -d | grep -q 'docs-only change'; then
+test "${release_notes_status}" = '404'
+if grep -q 'docs-only change' <<<"${release_notes}"; then
   echo 'Excluded docs-only commit appeared in release notes.' >&2
   exit 1
 fi
@@ -238,9 +240,7 @@ pulls="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls?state=open")"
 test "$(jq 'length' <<<"${pulls}")" = '1'
 test "$(jq -r '.[0].number' <<<"${pulls}")" = '1'
-release_notes="$(curl -fsS -H "${AUTH_HEADER}" \
-  "${ROOT_URL}/api/v1/repos/e2e/demo/contents/RELEASE.md?ref=release-please--branches--main")"
-decoded_notes="$(jq -r '.content' <<<"${release_notes}" | tr -d '\n' | base64 -d)"
+decoded_notes="$(read_file CHANGELOG.md release-please--branches--main)"
 grep -q 'initial feature' <<<"${decoded_notes}"
 grep -q 'follow-up before release' <<<"${decoded_notes}"
 release_commits="$(curl -fsS -H "${AUTH_HEADER}" \
@@ -270,6 +270,8 @@ test "$(jq -r '.[0].commit.sha' <<<"${tags}")" = "${merge_sha}"
 test "$(jq 'length' <<<"${releases}")" = '1'
 test "$(jq -r '.[0].tag_name' <<<"${releases}")" = "${FIRST_TAG}"
 test "$(jq -r '.[0].target_commitish' <<<"${releases}")" = "${merge_sha}"
+grep -q 'initial feature' <<<"$(jq -r '.[0].body' <<<"${releases}")"
+grep -q 'follow-up before release' <<<"$(jq -r '.[0].body' <<<"${releases}")"
 
 curl -fsS \
   -H "${AUTH_HEADER}" \
@@ -437,9 +439,12 @@ path_title="$(jq -r '.[0].title' <<<"${path_pull}")"
 test "${path_title}" = 'chore(main): release 0.1.0'
 test "$(jq -r '.[0].head.repo.full_name' <<<"${path_pull}")" = 'e2e/path-demo'
 path_notes="$(curl -fsS -H "${AUTH_HEADER}" \
-  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/RELEASE.md?ref=release-please--branches--main" | \
+  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/CHANGELOG.md?ref=release-please--branches--main" | \
   jq -r '.content' | tr -d '\n' | base64 -d)"
 grep -q 'package feature' <<<"${path_notes}"
+path_release_notes_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/RELEASE.md?ref=release-please--branches--main")"
+test "${path_release_notes_status}" = '404'
 path_manifest="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/.release-please-manifest.json?ref=release-please--branches--main" | \
   jq -r '.content' | tr -d '\n' | base64 -d)"
@@ -457,7 +462,7 @@ curl -fsS \
 run_action release-team/path-demo packages/api true '[]' '[]'
 test "$(output_value "${WORK_DIR}/action-output" pr_updated)" = 'true'
 path_notes="$(curl -fsS -H "${AUTH_HEADER}" \
-  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/RELEASE.md?ref=release-please--branches--main" | \
+  "${ROOT_URL}/api/v1/repos/e2e/path-demo/contents/packages/api/CHANGELOG.md?ref=release-please--branches--main" | \
   jq -r '.content' | tr -d '\n' | base64 -d)"
 grep -q 'package follow-up' <<<"${path_notes}"
 

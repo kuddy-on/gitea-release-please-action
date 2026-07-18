@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { generateReleaseMarkdown } from '../src/markdown.js';
+import {
+  extractReleaseNotesFromChangelog,
+  generateReleaseMarkdown,
+} from '../src/markdown.js';
 
 describe('release markdown', () => {
   it('groups changes, prepends changelog history, and creates compare links', () => {
@@ -80,7 +83,24 @@ describe('release markdown', () => {
     );
   });
 
-  it('links issue references found in subjects and commit footers', () => {
+  it('extracts one version section from a cumulative changelog', () => {
+    const changelog =
+      '# Changelog\n\n' +
+      '## [1.2.0](https://gitea.example/compare/v1.1.0...v1.2.0) (2026-07-14)\n\n' +
+      '### Features\n\n* current\n\n' +
+      '## 1.1.0\n\n* previous\n';
+
+    expect(extractReleaseNotesFromChangelog(changelog, '1.2.0')).toBe(
+      '## [1.2.0](https://gitea.example/compare/v1.1.0...v1.2.0) (2026-07-14)\n\n' +
+        '### Features\n\n* current\n',
+    );
+    expect(extractReleaseNotesFromChangelog(changelog, '1.1.0')).toBe(
+      '## 1.1.0\n\n* previous\n',
+    );
+    expect(extractReleaseNotesFromChangelog(changelog, '9.9.9')).toBeNull();
+  });
+
+  it('normalizes issue references after titles and before authors and commits', () => {
     const generated = generateReleaseMarkdown({
       version: '1.2.1',
       tagName: 'v1.2.1',
@@ -90,27 +110,60 @@ describe('release markdown', () => {
       owner: 'acme',
       repo: 'demo',
       changelogSections: [{ type: 'fix', section: 'Bug Fixes' }],
-      includeCommitAuthors: false,
+      includeCommitAuthors: true,
       changes: [
         {
           sha: '1234567890',
           url: 'https://gitea.example/acme/demo/commit/1234567890',
           type: 'fix',
-          scope: null,
-          subject: 'repair cache (#12)',
+          scope: 'api',
+          subject: '(#12) repair cache',
           breaking: false,
           breakingNotes: [],
+          author: '@alice',
           issueReferences: [
             { number: '12' },
             { number: '34', owner: 'other', repository: 'service' },
           ],
         },
+        {
+          sha: 'abcdef1234',
+          url: 'https://gitea.example/acme/demo/commit/abcdef1234',
+          type: 'fix',
+          scope: null,
+          subject: 'repair queue (#13, #15)',
+          breaking: false,
+          breakingNotes: [],
+          issueReferences: [{ number: '13' }, { number: '15' }],
+        },
+        {
+          sha: 'fedcba9876',
+          url: 'https://gitea.example/acme/demo/commit/fedcba9876',
+          type: 'fix',
+          scope: null,
+          subject: 'repair #14 worker',
+          breaking: false,
+          breakingNotes: [],
+          issueReferences: [{ number: '14' }],
+        },
       ],
     });
 
     expect(generated.releaseNotes).toContain(
-      'repair cache ([#12](https://gitea.example/acme/demo/issues/12)) ' +
-        '([other/service#34](https://gitea.example/other/service/issues/34))',
+      '* **api:** repair cache ' +
+        '([#12](https://gitea.example/acme/demo/issues/12)) ' +
+        '([other/service#34](https://gitea.example/other/service/issues/34)) ' +
+        '(@alice) ' +
+        '([1234567](https://gitea.example/acme/demo/commit/1234567890))',
+    );
+    expect(generated.releaseNotes).toContain(
+      '* repair queue ([#13](https://gitea.example/acme/demo/issues/13)) ' +
+        '([#15](https://gitea.example/acme/demo/issues/15)) ' +
+        '([abcdef1](https://gitea.example/acme/demo/commit/abcdef1234))',
+    );
+    expect(generated.releaseNotes).toContain(
+      '* repair worker ([#14](https://gitea.example/acme/demo/issues/14)) ' +
+        '([fedcba9](https://gitea.example/acme/demo/commit/fedcba9876))',
     );
   });
 });

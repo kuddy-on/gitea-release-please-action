@@ -66,9 +66,8 @@ inputs:
     description: Host used for changelog commit and compare links.
     required: false
   release-notes-path:
-    description: File containing the pending Gitea Release body.
+    description: Deprecated and ignored. Release notes come from CHANGELOG.md or the release PR body.
     required: false
-    default: RELEASE.md
   extra-files:
     description: JSON array of additional generic, JSON, TOML, YAML, or XML version files.
     required: false
