@@ -35,9 +35,16 @@ export function extractReleaseNotesFromChangelog(
   const match = heading.exec(changelog);
   if (!match) return null;
   const following = changelog.slice(match.index + match[0].length);
-  const nextHeading = /^##\s+/m.exec(following);
+  const boundaries = [
+    /^##\s+/m.exec(following)?.index,
+    /^[ \t]*<!--\s*insertion marker\s*-->/im.exec(following)?.index,
+    /^[ \t]*<a\s+(?:name|id)=["'][^"'\r\n]+["']\s*><\/a>[ \t]*\r?$/im.exec(
+      following,
+    )?.index,
+  ].filter((index): index is number => index !== undefined);
+  const boundary = boundaries.length > 0 ? Math.min(...boundaries) : following.length;
   const section = changelog
-    .slice(match.index, match.index + match[0].length + (nextHeading?.index ?? following.length))
+    .slice(match.index, match.index + match[0].length + boundary)
     .trim();
   return section ? `${section}\n` : null;
 }

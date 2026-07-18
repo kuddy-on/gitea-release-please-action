@@ -91,6 +91,11 @@ curl -fsS \
 curl -fsS \
   -H "${AUTH_HEADER}" \
   -H 'Content-Type: application/json' \
+  -d '{"branch":"main","message":"chore: add legacy changelog","content":"IyBDaGFuZ2Vsb2cKCjwhLS0gaW5zZXJ0aW9uIG1hcmtlciAtLT4KPGEgbmFtZT0iMC4wLjAiPjwvYT4KIyMgWzAuMC4wXShodHRwczovL2V4YW1wbGUuaW52YWxpZC9yZWxlYXNlcy90YWcvdjAuMC4wKQoKKiBsZWdhY3kgcmVsZWFzZQo="}' \
+  "${ROOT_URL}/api/v1/repos/e2e/demo/contents/CHANGELOG.md" >"${WORK_DIR}/changelog-commit.json"
+curl -fsS \
+  -H "${AUTH_HEADER}" \
+  -H 'Content-Type: application/json' \
   -d '{"branch":"main","message":"chore: add worker metadata","content":"eyJuYW1lIjoid29ya2VyIiwidmVyc2lvbiI6IjAuMC4wIn0K"}' \
   "${ROOT_URL}/api/v1/repos/e2e/demo/contents/packages/worker.json" >"${WORK_DIR}/worker-commit.json"
 curl -fsS \
@@ -272,6 +277,10 @@ test "$(jq -r '.[0].tag_name' <<<"${releases}")" = "${FIRST_TAG}"
 test "$(jq -r '.[0].target_commitish' <<<"${releases}")" = "${merge_sha}"
 grep -q 'initial feature' <<<"$(jq -r '.[0].body' <<<"${releases}")"
 grep -q 'follow-up before release' <<<"$(jq -r '.[0].body' <<<"${releases}")"
+if jq -r '.[0].body' <<<"${releases}" | grep -Eq 'insertion marker|legacy release'; then
+  echo 'Legacy changelog preamble appeared in the Gitea Release body.' >&2
+  exit 1
+fi
 
 curl -fsS \
   -H "${AUTH_HEADER}" \
