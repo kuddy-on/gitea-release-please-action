@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildPullRequestBody,
+  extractReleaseNotesFromPullRequestBody,
   hashContent,
   parseMarker,
   serializeMarker,
@@ -9,17 +10,16 @@ import {
 import type { ReleaseMarker } from '../src/types.js';
 
 const marker: ReleaseMarker = {
-  schema: 2,
+  schema: 3,
   version: '0.1.0',
   tagName: 'v0.1.0',
   targetBranch: 'main',
   targetHeadSha: '1111111111111111',
   changelogPath: 'CHANGELOG.md',
-  releaseNotesPath: 'RELEASE.md',
+  releaseNotesHash: hashContent('# v0.1.0\n\nNotes\n'),
   manifestPath: '.release-please-manifest.json',
   fileHashes: {
     'CHANGELOG.md': hashContent('changelog'),
-    'RELEASE.md': hashContent('notes'),
     '.release-please-manifest.json': hashContent('{".":"0.1.0"}\n'),
   },
 };
@@ -28,6 +28,9 @@ describe('release PR marker', () => {
   it('round trips through the PR body', () => {
     const body = buildPullRequestBody(marker, '# v0.1.0\n\nNotes\n');
     expect(parseMarker(body)).toEqual(marker);
+    expect(extractReleaseNotesFromPullRequestBody(body)).toBe(
+      '# v0.1.0\n\nNotes\n',
+    );
     expect(body).toContain(
       'This PR was generated with [Gitea Release Please](https://github.com/kuddy-on/gitea-release-please-action).',
     );
@@ -37,8 +40,13 @@ describe('release PR marker', () => {
     const legacyMarker: ReleaseMarker = {
       ...marker,
       schema: 1,
-      fileHashes: { ...marker.fileHashes },
+      releaseNotesPath: 'RELEASE.md',
+      fileHashes: {
+        ...marker.fileHashes,
+        'RELEASE.md': hashContent('notes'),
+      },
     };
+    delete legacyMarker.releaseNotesHash;
     delete legacyMarker.targetHeadSha;
     delete legacyMarker.manifestPath;
     delete legacyMarker.fileHashes['.release-please-manifest.json'];
@@ -66,6 +74,16 @@ describe('release PR marker', () => {
     expect(
       parseMarker(serializeMarker({ ...marker, targetHeadSha: 'not-a-sha' })),
     ).toBeNull();
+    expect(
+      parseMarker(serializeMarker({ ...marker, releaseNotesHash: 'invalid' })),
+    ).toBeNull();
+    expect(
+      parseMarker(serializeMarker({ ...marker, releaseNotesPath: 'RELEASE.md' })),
+    ).toBeNull();
+  });
+
+  it('returns null when the PR body has no stable release notes section', () => {
+    expect(extractReleaseNotesFromPullRequestBody(serializeMarker(marker))).toBeNull();
   });
 
   it('serializes the marker on one line', () => {

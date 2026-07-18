@@ -19,6 +19,29 @@ interface GeneratedMarkdown {
   releaseNotes: string;
 }
 
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function extractReleaseNotesFromChangelog(
+  changelog: string,
+  version: string,
+): string | null {
+  const escapedVersion = escapeRegularExpression(version);
+  const heading = new RegExp(
+    `^##\\s+(?:\\[${escapedVersion}\\](?:\\([^\\r\\n]*\\))?|${escapedVersion})(?:\\s+\\([^\\r\\n]*\\))?\\s*$`,
+    'm',
+  );
+  const match = heading.exec(changelog);
+  if (!match) return null;
+  const following = changelog.slice(match.index + match[0].length);
+  const nextHeading = /^##\s+/m.exec(following);
+  const section = changelog
+    .slice(match.index, match.index + match[0].length + (nextHeading?.index ?? following.length))
+    .trim();
+  return section ? `${section}\n` : null;
+}
+
 function escapeMarkdown(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
@@ -42,11 +65,25 @@ function issueUrl(
   return `${options.webUrl}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(reference.number)}`;
 }
 
-function escapeRegularExpression(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function normalizeIssueText(value: string, labels: string[]): string {
+  const matchLabels = [...labels].sort((left, right) => right.length - left.length);
+  const pattern = new RegExp(
+    `(?<![\\w./-])(?:${matchLabels.map(escapeRegularExpression).join('|')})(?![\\w-])`,
+    'g',
+  );
+
+  return value
+    .replace(pattern, '')
+    .replace(/\(\s*(?:(?:[,;/|&]|and|or|和|及|以及)\s*)*\)/gi, '')
+    .replace(/\[\s*(?:(?:[,;/|&]|and|or|和|及|以及)\s*)*\]/gi, '')
+    .replace(/\s+([,;.!?])/g, '$1')
+    .replace(/([([])\s+/g, '$1')
+    .replace(/\s+([)\]])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,;:()[\]]+|[\s,;:()[\]]+$/g, '');
 }
 
-function linkIssueReferences(
+function formatTextWithIssueReferences(
   value: string,
   references: IssueReference[] | undefined,
   options: Pick<ReleaseMarkdownOptions, 'webUrl' | 'owner' | 'repo'>,
@@ -55,36 +92,15 @@ function linkIssueReferences(
 
   const byLabel = new Map(references.map((reference) => [issueLabel(reference), reference]));
   const labels = [...byLabel.keys()];
-  const matchLabels = [...labels].sort((left, right) => right.length - left.length);
-  const pattern = new RegExp(
-    `(?<![\\w./-])(?:${matchLabels.map(escapeRegularExpression).join('|')})(?![\\w-])`,
-    'g',
-  );
-  const linked = new Set<string>();
-  let result = '';
-  let start = 0;
-
-  for (const match of value.matchAll(pattern)) {
-    const label = match[0];
-    const index = match.index;
-    const reference = byLabel.get(label);
-    if (!reference) continue;
-    result += escapeMarkdown(value.slice(start, index));
-    result += `[${escapeMarkdown(label)}](${issueUrl(reference, options)})`;
-    linked.add(label);
-    start = index + label.length;
-  }
-
-  result += escapeMarkdown(value.slice(start));
-  const unlinked = labels
-    .filter((label) => !linked.has(label))
+  const text = escapeMarkdown(normalizeIssueText(value, labels));
+  const issueLinks = labels
     .map((label) => {
       const reference = byLabel.get(label);
       if (!reference) return '';
       return `([${escapeMarkdown(label)}](${issueUrl(reference, options)}))`;
     })
     .filter(Boolean);
-  return [result, ...unlinked].filter(Boolean).join(' ');
+  return [text, ...issueLinks].filter(Boolean).join(' ');
 }
 
 function changeLine(
@@ -96,7 +112,11 @@ function changeLine(
   const author = includeCommitAuthors && change.author
     ? ` (@${escapeMarkdown(change.author.replace(/^@/, ''))})`
     : '';
-  const subject = linkIssueReferences(change.subject, change.issueReferences, options);
+  const subject = formatTextWithIssueReferences(
+    change.subject,
+    change.issueReferences,
+    options,
+  );
   return `* ${scope}${subject}${author} ([${change.sha.slice(0, 7)}](${change.url}))`;
 }
 
@@ -115,7 +135,7 @@ function sections(
         .flatMap((change) =>
           change.breakingNotes.map(
             (note) =>
-              `* ${linkIssueReferences(note, change.issueReferences, options)} ([${change.sha.slice(0, 7)}](${change.url}))`,
+              `* ${formatTextWithIssueReferences(note, change.issueReferences, options)} ([${change.sha.slice(0, 7)}](${change.url}))`,
           ),
         )
         .join('\n')}`;

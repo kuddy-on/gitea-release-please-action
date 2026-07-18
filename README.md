@@ -85,8 +85,12 @@ The first release defaults to `1.0.0` when the manifest has no package entry. Th
 
 - `.release-please-manifest.json`, recording the pending package version;
 - `CHANGELOG.md`, containing cumulative release history;
-- `RELEASE.md`, containing the next Gitea Release body;
 - configured `extra-files`.
+
+The pending release notes are shown in the Release PR body. The action does not create a
+standalone `RELEASE.md` file. During publication it extracts the pending version section from
+`CHANGELOG.md`; with `skip-changelog: true`, it uses the hash-checked notes section embedded in
+the Release PR body instead.
 
 The machine branch is `release-please--branches--main`, and the default PR title is `chore(main): release 1.2.3`. While it remains open, every new push to `main` rebuilds that branch from the latest `main`, updates the same PR, and recalculates the highest bump. The branch must allow force updates and must not be edited manually. Squash, merge, rebase, and rebase-merge are all supported when the Release PR is merged.
 
@@ -128,7 +132,7 @@ with:
   path: services/api
 ```
 
-Only commits touching `services/api` participate in version calculation. `CHANGELOG.md`, `RELEASE.md`, and `extra-files` paths are relative to that directory; the manifest remains at the repository-relative `manifest-file` location and uses the key `services/api`. The equivalent repository configuration is:
+Only commits touching `services/api` participate in version calculation. `CHANGELOG.md` and `extra-files` paths are relative to that directory; the manifest remains at the repository-relative `manifest-file` location and uses the key `services/api`. The equivalent repository configuration is:
 
 ```json
 {
@@ -178,11 +182,15 @@ Every matched file must exist and every selector or generic marker must match. A
 
 ## Publishing and security
 
-Publishing requires all of the following: a closed and merged PR, the action's machine-readable marker, the pending lifecycle label, the expected machine branch and source repository, a manifest entry matching the pending version, matching generated-file hashes at the merge commit, and a non-conflicting tag. The action tags the Release PR merge SHA, creates the Gitea Release from `RELEASE.md`, changes `autorelease: pending` to `autorelease: tagged`, and deletes the machine branch. Reruns are idempotent and can repair a missing Release when the correct tag already exists.
+Publishing requires all of the following: a closed and merged PR, the action's machine-readable marker, the pending lifecycle label, the expected machine branch and source repository, a manifest entry matching the pending version, matching generated-file and release-notes hashes at the merge commit, and a non-conflicting tag. The action tags the Release PR merge SHA, creates the Gitea Release from the current `CHANGELOG.md` version section (or the Release PR body when `skip-changelog` is enabled), changes `autorelease: pending` to `autorelease: tagged`, and deletes the machine branch. Reruns are idempotent and can repair a missing Release when the correct tag already exists.
 
 ### Migrating from v1
 
 Version 2 replaces the mandatory `version.txt` contract with the standard manifest. Before changing `@v1` to `@v2`, create `.release-please-manifest.json` with the version of the latest reachable Tag, remove `version-file`, and keep real package versions under `extra-files`. For example, migrate Tag `v1.2.3` with `{ ".": "1.2.3" }`. A mismatch stops the action rather than guessing a release boundary.
+
+`release-notes-path` is deprecated and ignored. Existing open Release PRs using the old marker
+format remain publishable through their legacy notes file, but new Release PRs do not create or
+update that file. A previously generated `RELEASE.md` can be removed after upgrading.
 
 `skip-gitea-release` leaves publication to an external process. Until a matching tag exists, the merged pending PR intentionally blocks creation of another Release PR.
 

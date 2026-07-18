@@ -5,7 +5,7 @@ import { packageVersion, parseManifest } from './manifest.js';
 import { parseMarker } from './marker.js';
 import type { ReleaseHead } from './release-head.js';
 import { addPath, ROOT_PROJECT_PATH } from './repository-path.js';
-import { LifecycleLabels, releaseBranchName, verifyMarkerFiles } from './release-state.js';
+import { LifecycleLabels, releaseBranchName, verifyReleaseState } from './release-state.js';
 import type { ActionConfig, Logger, PublishResult, PullRequest } from './types.js';
 
 export type PublishApi = Pick<
@@ -97,31 +97,29 @@ export class PublishManager {
       );
     }
 
-    const releaseNotes = await verifyMarkerFiles(
-      this.client,
-      marker,
-      mergeSha,
-      pullRequest.number,
-    );
     const expectedChangelogPath = this.config.skipChangelog
       ? undefined
       : addPath(this.config.path, this.config.changelogPath);
-    const expectedReleaseNotesPath = addPath(
-      this.config.path,
-      this.config.releaseNotesPath,
-    );
     const expectedManifestPath = this.config.manifestFile;
+    const validManifestMarker = marker.schema === 1
+      ? marker.manifestPath === undefined || marker.manifestPath === expectedManifestPath
+      : marker.manifestPath === expectedManifestPath &&
+        marker.fileHashes[expectedManifestPath] !== undefined;
     if (
-      marker.schema !== 2 ||
-      marker.releaseNotesPath !== expectedReleaseNotesPath ||
       marker.changelogPath !== expectedChangelogPath ||
-      marker.manifestPath !== expectedManifestPath ||
-      marker.fileHashes[expectedManifestPath] === undefined
+      !validManifestMarker
     ) {
       throw new Error(
         `Release PR #${pullRequest.number} marker does not match the configured release files.`,
       );
     }
+    const releaseNotes = await verifyReleaseState(
+      this.client,
+      marker,
+      mergeSha,
+      pullRequest.number,
+      pullRequest.body ?? '',
+    );
     const manifestContent = await this.client.getTextContent(
       expectedManifestPath,
       mergeSha,

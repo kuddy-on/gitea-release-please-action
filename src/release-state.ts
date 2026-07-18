@@ -1,5 +1,9 @@
 import { GiteaApiError, GiteaClient } from './gitea-client.js';
-import { hashContent } from './marker.js';
+import {
+  extractReleaseNotesFromPullRequestBody,
+  hashContent,
+} from './marker.js';
+import { extractReleaseNotesFromChangelog } from './markdown.js';
 import type {
   Logger,
   PullRequest,
@@ -20,13 +24,14 @@ export function releaseBranchName(targetBranch: string): string {
   return `release-please--branches--${safeTarget}`;
 }
 
-export async function verifyMarkerFiles(
+export async function verifyReleaseState(
   client: Pick<GiteaClient, 'getTextContent'>,
   marker: ReleaseMarker,
   ref: string,
   pullRequestNumber: number,
+  pullRequestBody: string,
 ): Promise<string> {
-  let releaseNotes: string | null = null;
+  const contents = new Map<string, string>();
   for (const [path, expectedHash] of Object.entries(marker.fileHashes)) {
     const content = await client.getTextContent(path, ref);
     if (content === null || hashContent(content) !== expectedHash) {
@@ -34,11 +39,35 @@ export async function verifyMarkerFiles(
         `Generated file ${path} in release PR #${pullRequestNumber} does not match its release marker.`,
       );
     }
-    if (path === marker.releaseNotesPath) releaseNotes = content;
+    contents.set(path, content);
   }
+
+  if (marker.schema === 1 || marker.schema === 2) {
+    const releaseNotes = marker.releaseNotesPath
+      ? contents.get(marker.releaseNotesPath)
+      : undefined;
+    if (releaseNotes !== undefined) return releaseNotes;
+    throw new Error(
+      `Release PR #${pullRequestNumber} marker does not contain its legacy release notes file.`,
+    );
+  }
+
+  const releaseNotes = marker.changelogPath
+    ? extractReleaseNotesFromChangelog(
+        contents.get(marker.changelogPath) ?? '',
+        marker.version,
+      )
+    : extractReleaseNotesFromPullRequestBody(pullRequestBody);
   if (releaseNotes === null) {
     throw new Error(
-      `Release PR #${pullRequestNumber} marker does not contain ${marker.releaseNotesPath}.`,
+      marker.changelogPath
+        ? `Release PR #${pullRequestNumber} changelog does not contain version ${marker.version}.`
+        : `Release PR #${pullRequestNumber} body does not contain release notes.`,
+    );
+  }
+  if (hashContent(releaseNotes) !== marker.releaseNotesHash) {
+    throw new Error(
+      `Release notes in release PR #${pullRequestNumber} do not match its release marker.`,
     );
   }
   return releaseNotes;

@@ -11,7 +11,7 @@ import { addPath, pathContains, ROOT_PROJECT_PATH } from './repository-path.js';
 import {
   LifecycleLabels,
   releaseBranchName,
-  verifyMarkerFiles,
+  verifyReleaseState,
 } from './release-state.js';
 import { calculateVersion } from './versioning.js';
 import type {
@@ -64,22 +64,38 @@ function createMarker(
   targetBranch: string,
   targetHeadSha: string,
   candidate: ReleaseCandidate,
+  legacyReleaseNotesPath?: string,
 ): ReleaseMarker {
   const marker: ReleaseMarker = {
-    schema: 2,
+    schema: legacyReleaseNotesPath ? 2 : 3,
     path: config.path,
     version: candidate.version,
     tagName: candidate.tagName,
     targetBranch,
     targetHeadSha,
-    releaseNotesPath: addPath(config.path, config.releaseNotesPath),
     manifestPath: config.manifestFile,
     fileHashes: Object.fromEntries(
       Object.entries(candidate.files).map(([path, content]) => [path, hashContent(content)]),
     ),
+    ...(legacyReleaseNotesPath
+      ? { releaseNotesPath: legacyReleaseNotesPath }
+      : { releaseNotesHash: hashContent(candidate.releaseNotes) }),
   };
   if (!config.skipChangelog) marker.changelogPath = addPath(config.path, config.changelogPath);
   return marker;
+}
+
+function legacyCandidate(
+  candidate: ReleaseCandidate,
+  releaseNotesPath: string,
+): ReleaseCandidate {
+  return {
+    ...candidate,
+    files: {
+      ...candidate.files,
+      [releaseNotesPath]: candidate.releaseNotes,
+    },
+  };
 }
 
 function formatDate(date: Date, pattern: string): string {
@@ -184,7 +200,6 @@ export class ReleaseManager {
 
     const tagName = `${this.config.tagPrefix}${version}`;
     const changelogPath = addPath(this.config.path, this.config.changelogPath);
-    const releaseNotesPath = addPath(this.config.path, this.config.releaseNotesPath);
     const existingChangelog = this.config.skipChangelog
       ? null
       : await this.client.getTextContent(changelogPath, targetBranch);
@@ -205,7 +220,6 @@ export class ReleaseManager {
       ...(scan.previousTag ? { previousTag: scan.previousTag.name } : {}),
     });
     const files: Record<string, string> = {
-      [releaseNotesPath]: markdown.releaseNotes,
       [this.config.manifestFile]: updateManifest(manifest, this.config.path, version),
     };
     if (!this.config.skipChangelog) files[changelogPath] = markdown.changelog;
@@ -217,11 +231,7 @@ export class ReleaseManager {
       ? await this.client.listFiles(targetBranch)
       : [];
     const configuredExtraFiles = expandExtraFiles(repositoryExtraFiles, repositoryFiles);
-    const reservedPaths = new Set([
-      changelogPath,
-      releaseNotesPath,
-      this.config.manifestFile,
-    ]);
+    const reservedPaths = new Set([changelogPath, this.config.manifestFile]);
     const reservedMatch = configuredExtraFiles.find((file) => reservedPaths.has(file.path));
     if (reservedMatch) {
       throw new Error(`extra-files path ${reservedMatch.path} conflicts with a release file.`);
@@ -431,16 +441,16 @@ export class ReleaseManager {
     const commitMessage = this.config.signoff
       ? `${baseTitle}\n\nSigned-off-by: ${this.config.signoff}`
       : baseTitle;
-    const marker = createMarker(this.config, targetBranch, targetHeadSha, candidate);
-    const body = buildPullRequestBody(
-      marker,
-      candidate.releaseNotes,
-      this.config.pullRequestHeader,
-      this.config.pullRequestFooter,
-    );
     const existingPullRequest = releasePullRequests[0];
 
     if (!existingPullRequest) {
+      const marker = createMarker(this.config, targetBranch, targetHeadSha, candidate);
+      const body = buildPullRequestBody(
+        marker,
+        candidate.releaseNotes,
+        this.config.pullRequestHeader,
+        this.config.pullRequestFooter,
+      );
       await this.createReleasePullRequest(
         targetBranch,
         targetHeadSha,
@@ -456,38 +466,74 @@ export class ReleaseManager {
 
     const previousMarker = parseMarker(existingPullRequest.body ?? '');
     if (!previousMarker) throw new Error('Internal error: release pull request marker disappeared.');
+    const expectedChangelogPath = this.config.skipChangelog
+      ? undefined
+      : addPath(this.config.path, this.config.changelogPath);
+    const legacyMarker = previousMarker.schema === 1 || previousMarker.schema === 2;
     if (
       (previousMarker.path ?? ROOT_PROJECT_PATH) !== this.config.path ||
-      previousMarker.changelogPath !==
-        (this.config.skipChangelog
-          ? undefined
-          : addPath(this.config.path, this.config.changelogPath)) ||
-      previousMarker.releaseNotesPath !== addPath(this.config.path, this.config.releaseNotesPath) ||
-      previousMarker.manifestPath !== this.config.manifestFile
+      previousMarker.changelogPath !== expectedChangelogPath ||
+      (previousMarker.schema !== 1 &&
+        previousMarker.manifestPath !== this.config.manifestFile) ||
+      (previousMarker.schema === 1 &&
+        previousMarker.manifestPath !== undefined &&
+        previousMarker.manifestPath !== this.config.manifestFile)
     ) {
       throw new Error(
         `Release file paths changed while PR #${existingPullRequest.number} is open. Close it before changing action paths.`,
       );
     }
+    const legacyReleaseNotesPath = legacyMarker
+      ? previousMarker.releaseNotesPath
+      : undefined;
+    if (legacyMarker && !legacyReleaseNotesPath) {
+      throw new Error(
+        `Release PR #${existingPullRequest.number} has an invalid legacy release notes path.`,
+      );
+    }
+    const releaseCandidate = legacyReleaseNotesPath
+      ? legacyCandidate(candidate, legacyReleaseNotesPath)
+      : candidate;
+    const marker = createMarker(
+      this.config,
+      targetBranch,
+      targetHeadSha,
+      releaseCandidate,
+      legacyReleaseNotesPath,
+    );
+    const body = buildPullRequestBody(
+      marker,
+      releaseCandidate.releaseNotes,
+      this.config.pullRequestHeader,
+      this.config.pullRequestFooter,
+    );
     const previousFiles = Object.keys(previousMarker.fileHashes).sort();
-    const candidateFiles = Object.keys(candidate.files).sort();
-    if (JSON.stringify(previousFiles) !== JSON.stringify(candidateFiles)) {
+    const candidateFiles = Object.keys(releaseCandidate.files).sort();
+    const compatibleCandidateFiles = previousMarker.schema === 1
+      ? candidateFiles.filter((path) => path !== this.config.manifestFile)
+      : candidateFiles;
+    if (JSON.stringify(previousFiles) !== JSON.stringify(compatibleCandidateFiles)) {
       throw new Error(
         `Generated file set changed while PR #${existingPullRequest.number} is open. Close it before changing extra-files.`,
       );
     }
 
-    await verifyMarkerFiles(
+    await verifyReleaseState(
       this.head.client,
       previousMarker,
       branch,
       existingPullRequest.number,
+      existingPullRequest.body ?? '',
     );
-    const releaseOperations = await this.fileOperations(branch, candidate, this.head.client);
+    const releaseOperations = await this.fileOperations(
+      branch,
+      releaseCandidate,
+      this.head.client,
+    );
     const baseChanged = previousMarker.targetHeadSha !== targetHeadSha;
     const rebuildBranch = baseChanged || releaseOperations.length > 0;
     if (rebuildBranch) {
-      const operations = await this.fileOperations(targetBranch, candidate);
+      const operations = await this.fileOperations(targetBranch, releaseCandidate);
       if (operations.length === 0) {
         throw new Error(
           `Release PR #${existingPullRequest.number} has no generated diff from ${targetBranch}; close it before rerunning.`,
@@ -551,7 +597,7 @@ export class ReleaseManager {
       result.prNumber = existingPullRequest.number;
       result.pullRequest = pullRequestOutput(
         { ...outputPullRequest, title, body },
-        Object.keys(candidate.files),
+        Object.keys(releaseCandidate.files),
         [...this.config.labels, ...this.config.extraLabels],
       );
     } else {

@@ -264,12 +264,11 @@ function validateVersioning(value: unknown): VersioningStrategy {
 function checkConfig(config: ActionConfig): void {
   const generatedPaths = new Set([
     addPath(config.path, config.changelogPath),
-    addPath(config.path, config.releaseNotesPath),
     config.manifestFile,
   ]);
-  if (generatedPaths.size !== 3) {
+  if (generatedPaths.size !== 2) {
     throw new Error(
-      'changelog-path, release-notes-path, and manifest-file must be different files.',
+      'changelog-path and manifest-file must be different files.',
     );
   }
   for (const extraFile of config.extraFiles) {
@@ -319,6 +318,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
       'version-file is no longer supported; use manifest-file and extra-files.',
     );
   }
+  if (optionalInput('release-notes-path')) {
+    core.warning(
+      'release-notes-path is deprecated and ignored; release notes are read from CHANGELOG.md or the release PR body.',
+    );
+  }
   const includeV = booleanInput('include-v-in-tag', true, env);
   const tagPrefix = hasInput('tag-prefix', env)
     ? inputWithDefault('tag-prefix', '', env)
@@ -345,10 +349,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
       optionalInput('changelog-path') ?? 'CHANGELOG.md',
     ),
     changelogHost: optionalInput('changelog-host') ?? normalizeUrls(serverUrl).webUrl,
-    releaseNotesPath: validatePath(
-      'release-notes-path',
-      optionalInput('release-notes-path') ?? 'RELEASE.md',
-    ),
     extraFiles: parseExtraFiles(optionalInput('extra-files')),
     excludePaths: parsePaths('exclude-paths', optionalInput('exclude-paths'), []),
     versioningStrategy: validateVersioning(
@@ -498,6 +498,11 @@ export function applyRepositoryConfig(
       'version-file is no longer supported; use manifest-file and extra-files.',
     );
   }
+  if (raw['release-notes-path'] !== undefined) {
+    core.warning(
+      'release-notes-path is deprecated and ignored; release notes are read from CHANGELOG.md or the release PR body.',
+    );
+  }
 
   const tagPrefix =
     raw['tag-prefix'] !== undefined
@@ -526,10 +531,6 @@ export function applyRepositoryConfig(
       raw['changelog-path'] ?? base.changelogPath,
     ),
     changelogHost: stringOption(raw, 'changelog-host', base.changelogHost),
-    releaseNotesPath: validatePath(
-      'release-notes-path',
-      raw['release-notes-path'] ?? base.releaseNotesPath,
-    ),
     extraFiles:
       raw['extra-files'] === undefined
         ? base.extraFiles

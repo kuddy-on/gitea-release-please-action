@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { GiteaApiError } from '../src/gitea-client.js';
-import { hashContent, parseMarker } from '../src/marker.js';
+import {
+  buildPullRequestBody,
+  extractReleaseNotesFromPullRequestBody,
+  hashContent,
+  parseMarker,
+} from '../src/marker.js';
 import type { ReleaseHead } from '../src/release-head.js';
 import { ReleaseManager, type ReleaseApi } from '../src/release-manager.js';
 import type {
@@ -31,7 +36,6 @@ const config: ActionConfig = {
   includeVInReleaseName: true,
   changelogPath: 'CHANGELOG.md',
   changelogHost: 'https://gitea.example',
-  releaseNotesPath: 'RELEASE.md',
   extraFiles: [],
   excludePaths: [],
   versioningStrategy: 'default',
@@ -309,7 +313,7 @@ function manager(api: FakeApi, overrides: Partial<ActionConfig> = {}): ReleaseMa
 }
 
 describe('ReleaseManager', () => {
-  it('creates one release PR and atomically writes both release files', async () => {
+  it('creates one release PR without a standalone release notes file', async () => {
     const api = new FakeApi();
     const result = await manager(api).run();
 
@@ -320,7 +324,11 @@ describe('ReleaseManager', () => {
       message: 'chore(main): release 0.1.0',
     });
     expect(api.lastChangeFiles?.forcePush).toBeUndefined();
-    expect(api.lastChangeFiles?.files).toHaveLength(3);
+    expect(api.lastChangeFiles?.files).toHaveLength(2);
+    expect(api.lastChangeFiles?.files.map((file) => file.path).sort()).toEqual([
+      '.release-please-manifest.json',
+      'CHANGELOG.md',
+    ]);
     expect(
       JSON.parse(
         (await api.getTextContent(
@@ -332,11 +340,73 @@ describe('ReleaseManager', () => {
     const pullRequest = api.pullRequests[0];
     expect(pullRequest?.title).toBe('chore(main): release 0.1.0');
     expect(parseMarker(pullRequest?.body ?? '')).toMatchObject({
-      schema: 2,
+      schema: 3,
       version: '0.1.0',
       targetBranch: 'main',
       manifestPath: '.release-please-manifest.json',
+      releaseNotesHash: expect.any(String),
     });
+    expect(pullRequest?.body).toContain('initial feature');
+    expect(
+      api.files.get('release-please--branches--main')?.has('RELEASE.md'),
+    ).toBe(false);
+  });
+
+  it('stores release notes in the PR body when changelog updates are skipped', async () => {
+    const api = new FakeApi();
+
+    await manager(api, { skipChangelog: true }).run();
+
+    expect(api.lastChangeFiles?.files.map((file) => file.path)).toEqual([
+      '.release-please-manifest.json',
+    ]);
+    const pullRequest = api.pullRequests[0];
+    expect(parseMarker(pullRequest?.body ?? '')).toMatchObject({
+      schema: 3,
+      releaseNotesHash: expect.any(String),
+    });
+    expect(parseMarker(pullRequest?.body ?? '')?.changelogPath).toBeUndefined();
+    expect(extractReleaseNotesFromPullRequestBody(pullRequest?.body ?? '')).toContain(
+      'initial feature',
+    );
+  });
+
+  it('keeps updating an existing schema 2 release PR through its legacy notes file', async () => {
+    const api = new FakeApi();
+    await manager(api).run();
+    const pullRequest = api.pullRequests[0];
+    const currentMarker = parseMarker(pullRequest?.body ?? '');
+    const notes = extractReleaseNotesFromPullRequestBody(pullRequest?.body ?? '');
+    if (!pullRequest || !currentMarker || !notes) {
+      throw new Error('Missing generated release state');
+    }
+    const legacyMarker = {
+      ...currentMarker,
+      schema: 2 as const,
+      releaseNotesPath: 'RELEASE.md',
+      fileHashes: {
+        ...currentMarker.fileHashes,
+        'RELEASE.md': hashContent(notes),
+      },
+    };
+    delete legacyMarker.releaseNotesHash;
+    api.files.get('release-please--branches--main')?.set('RELEASE.md', {
+      content: notes,
+      sha: hashContent(notes).slice(0, 40),
+    });
+    pullRequest.body = buildPullRequestBody(legacyMarker, notes);
+    api.addMainCommit('2222222222222222', 'fix: update legacy release');
+
+    const result = await manager(api).run();
+
+    expect(result).toMatchObject({ prUpdated: true, prNumber: 1 });
+    expect(parseMarker(pullRequest.body)).toMatchObject({
+      schema: 2,
+      releaseNotesPath: 'RELEASE.md',
+    });
+    expect(
+      await api.getTextContent('RELEASE.md', 'release-please--branches--main'),
+    ).toContain('update legacy release');
   });
 
   it('accepts null commit files when root releases do not request file filtering', async () => {
@@ -412,7 +482,7 @@ describe('ReleaseManager', () => {
       firstReleaseHead,
     );
     const notes = await api.getTextContent(
-      'RELEASE.md',
+      'CHANGELOG.md',
       'release-please--branches--main',
     );
     expect(notes).toContain('initial feature');
@@ -492,7 +562,7 @@ describe('ReleaseManager', () => {
       '4444444444444444',
     );
     const notes = await api.getTextContent(
-      'RELEASE.md',
+      'CHANGELOG.md',
       'release-please--branches--main',
     );
     expect(notes).toContain('repair cache');
@@ -516,7 +586,7 @@ describe('ReleaseManager', () => {
     const api = new FakeApi();
     await manager(api).run();
     const releaseFiles = api.files.get('release-please--branches--main');
-    releaseFiles?.set('RELEASE.md', { content: 'manually edited', sha: 'manual' });
+    releaseFiles?.set('CHANGELOG.md', { content: 'manually edited', sha: 'manual' });
 
     await expect(manager(api).run()).rejects.toThrow('does not match its release marker');
   });
@@ -550,7 +620,7 @@ describe('ReleaseManager', () => {
 
     await manager(api, { extraFiles }).run();
 
-    expect(api.lastChangeFiles?.files).toHaveLength(5);
+    expect(api.lastChangeFiles?.files).toHaveLength(4);
     const releaseFiles = api.files.get('release-please--branches--main');
     expect(JSON.parse(releaseFiles?.get('package.json')?.content ?? '')).toMatchObject({
       version: '0.1.0',
@@ -559,7 +629,6 @@ describe('ReleaseManager', () => {
     expect(parseMarker(api.pullRequests[0]?.body ?? '')?.fileHashes).toEqual(
       expect.objectContaining({
         'CHANGELOG.md': expect.any(String),
-        'RELEASE.md': expect.any(String),
         '.release-please-manifest.json': expect.any(String),
         'package.json': expect.any(String),
         'pyproject.toml': expect.any(String),
@@ -648,7 +717,7 @@ describe('ReleaseManager', () => {
 
     await manager(api, { excludePaths: ['docs'] }).run();
 
-    const notes = await api.getTextContent('RELEASE.md', 'release-please--branches--main');
+    const notes = await api.getTextContent('CHANGELOG.md', 'release-please--branches--main');
     expect(notes).toContain('repair runtime');
     expect(notes).not.toContain('rewrite all docs');
   });
@@ -681,18 +750,17 @@ describe('ReleaseManager', () => {
     expect(api.lastChangeFiles?.files.map((file) => file.path).sort()).toEqual([
       '.release-please-manifest.json',
       'packages/api/CHANGELOG.md',
-      'packages/api/RELEASE.md',
       'packages/api/package.json',
     ]);
     const marker = parseMarker(api.pullRequests[0]?.body ?? '');
     expect(marker).toMatchObject({
       path: 'packages/api',
       changelogPath: 'packages/api/CHANGELOG.md',
-      releaseNotesPath: 'packages/api/RELEASE.md',
+      releaseNotesHash: expect.any(String),
       manifestPath: '.release-please-manifest.json',
     });
     const notes = await api.getTextContent(
-      'packages/api/RELEASE.md',
+      'packages/api/CHANGELOG.md',
       'release-please--branches--main',
     );
     expect(notes).toContain('repair package API');
@@ -725,7 +793,8 @@ describe('ReleaseManager', () => {
       ref: 'release-please--branches--main',
       repo: { full_name: 'release-bot/demo' },
     });
-    expect(fork.files.get('release-please--branches--main')?.has('RELEASE.md')).toBe(true);
+    expect(fork.files.get('release-please--branches--main')?.has('RELEASE.md')).toBe(false);
+    expect(fork.files.get('release-please--branches--main')?.has('CHANGELOG.md')).toBe(true);
     expect(upstream.files.get('release-please--branches--main')).toBeUndefined();
 
     upstream.addMainCommit('2222222222222222', 'fix: update fork release');
@@ -738,7 +807,7 @@ describe('ReleaseManager', () => {
     });
     expect(upstream.updatedPullRequestBranches).toEqual([1]);
     expect(
-      fork.files.get('release-please--branches--main')?.get('RELEASE.md')?.content,
+      fork.files.get('release-please--branches--main')?.get('CHANGELOG.md')?.content,
     ).toContain('update fork release');
   });
 

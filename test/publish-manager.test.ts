@@ -15,8 +15,8 @@ import type {
 const mergeSha = '9999999999999999999999999999999999999999';
 const targetHeadSha = '8888888888888888888888888888888888888888';
 const releaseBranch = 'release-please--branches--main';
-const changelog = '# Changelog\n\n## 1.3.0\n';
 const releaseNotes = '## 1.3.0\n\nRelease notes\n';
+const changelog = `# Changelog\n\n${releaseNotes}`;
 const manifest = '{\n  ".": "1.3.0"\n}\n';
 
 const config: ActionConfig = {
@@ -35,7 +35,6 @@ const config: ActionConfig = {
   includeVInReleaseName: true,
   changelogPath: 'CHANGELOG.md',
   changelogHost: 'https://gitea.example',
-  releaseNotesPath: 'RELEASE.md',
   extraFiles: [],
   excludePaths: [],
   versioningStrategy: 'default',
@@ -77,17 +76,16 @@ function releaseBody(
 ): string {
   return buildPullRequestBody(
     {
-      schema: 2,
+      schema: 3,
       version,
       tagName,
       targetBranch: 'main',
       targetHeadSha,
       changelogPath: 'CHANGELOG.md',
-      releaseNotesPath: 'RELEASE.md',
+      releaseNotesHash: hashContent(releaseNotes),
       manifestPath: '.release-please-manifest.json',
       fileHashes: {
         'CHANGELOG.md': hashContent(changelog),
-        'RELEASE.md': hashContent(releaseNotes),
         '.release-please-manifest.json': hashContent(manifestContent),
       },
     },
@@ -128,10 +126,9 @@ class FakePublishApi implements PublishApi {
     { id: 2, name: 'autorelease: tagged', color: '0e8a16' },
   ];
   branchExists = true;
-  changedFiles = ['CHANGELOG.md', 'RELEASE.md', '.release-please-manifest.json'];
+  changedFiles = ['CHANGELOG.md', '.release-please-manifest.json'];
   files = new Map([
     [`${mergeSha}:CHANGELOG.md`, changelog],
-    [`${mergeSha}:RELEASE.md`, releaseNotes],
     [`${mergeSha}:.release-please-manifest.json`, manifest],
   ]);
 
@@ -258,6 +255,61 @@ describe('PublishManager', () => {
     expect(api.branchExists).toBe(false);
   });
 
+  it('publishes a legacy schema 2 release PR from its release notes file', async () => {
+    const api = new FakePublishApi();
+    api.pullRequest.body = buildPullRequestBody(
+      {
+        schema: 2,
+        version: '1.3.0',
+        tagName: 'v1.3.0',
+        targetBranch: 'main',
+        targetHeadSha,
+        changelogPath: 'CHANGELOG.md',
+        releaseNotesPath: 'RELEASE.md',
+        manifestPath: '.release-please-manifest.json',
+        fileHashes: {
+          'CHANGELOG.md': hashContent(changelog),
+          'RELEASE.md': hashContent(releaseNotes),
+          '.release-please-manifest.json': hashContent(manifest),
+        },
+      },
+      releaseNotes,
+    );
+    api.changedFiles.push('RELEASE.md');
+    api.files.set(`${mergeSha}:RELEASE.md`, releaseNotes);
+
+    const result = await publish(api);
+
+    expect(result.body).toBe(releaseNotes);
+    expect(api.releases[0]?.body).toBe(releaseNotes);
+  });
+
+  it('publishes from hash-checked PR body notes when changelog updates are skipped', async () => {
+    const api = new FakePublishApi();
+    api.pullRequest.body = buildPullRequestBody(
+      {
+        schema: 3,
+        version: '1.3.0',
+        tagName: 'v1.3.0',
+        targetBranch: 'main',
+        targetHeadSha,
+        releaseNotesHash: hashContent(releaseNotes),
+        manifestPath: '.release-please-manifest.json',
+        fileHashes: {
+          '.release-please-manifest.json': hashContent(manifest),
+        },
+      },
+      releaseNotes,
+    );
+    api.changedFiles = ['.release-please-manifest.json'];
+    api.files.delete(`${mergeSha}:CHANGELOG.md`);
+
+    const result = await publish(api, { skipChangelog: true });
+
+    expect(result.body).toBe(releaseNotes);
+    expect(api.releases[0]?.body).toBe(releaseNotes);
+  });
+
   it('finishes lifecycle cleanup idempotently when tag and release already exist', async () => {
     const api = new FakePublishApi();
     api.tags.push({ name: 'v1.3.0', commit: { sha: mergeSha } });
@@ -307,8 +359,32 @@ describe('PublishManager', () => {
     await expect(publish(prefix)).rejects.toThrow('invalid version marker');
 
     const tampered = new FakePublishApi();
-    tampered.files.set(`${mergeSha}:RELEASE.md`, 'manually changed');
+    tampered.files.set(`${mergeSha}:CHANGELOG.md`, 'manually changed');
     await expect(publish(tampered)).rejects.toThrow('does not match its release marker');
+
+    const editedNotes = new FakePublishApi();
+    const editedChangelog = changelog.replace('Release notes', 'Edited notes');
+    editedNotes.files.set(`${mergeSha}:CHANGELOG.md`, editedChangelog);
+    editedNotes.pullRequest.body = buildPullRequestBody(
+      {
+        schema: 3,
+        version: '1.3.0',
+        tagName: 'v1.3.0',
+        targetBranch: 'main',
+        targetHeadSha,
+        changelogPath: 'CHANGELOG.md',
+        releaseNotesHash: hashContent(releaseNotes),
+        manifestPath: '.release-please-manifest.json',
+        fileHashes: {
+          'CHANGELOG.md': hashContent(editedChangelog),
+          '.release-please-manifest.json': hashContent(manifest),
+        },
+      },
+      releaseNotes,
+    );
+    await expect(publish(editedNotes)).rejects.toThrow(
+      'do not match its release marker',
+    );
 
     const conflict = new FakePublishApi();
     conflict.tags.push({ name: 'v1.3.0', commit: { sha: 'different-sha' } });
@@ -376,22 +452,21 @@ describe('PublishManager', () => {
 
   it('publishes a single non-root package from its scoped release files', async () => {
     const api = new FakePublishApi();
-    const packageChangelog = '# Changelog\n\n## 1.3.0\n';
     const packageNotes = '## 1.3.0\n\nPackage release notes\n';
+    const packageChangelog = `# Changelog\n\n${packageNotes}`;
     api.pullRequest.body = buildPullRequestBody(
       {
-        schema: 2,
+        schema: 3,
         path: 'packages/api',
         version: '1.3.0',
         tagName: 'v1.3.0',
         targetBranch: 'main',
         targetHeadSha,
         changelogPath: 'packages/api/CHANGELOG.md',
-        releaseNotesPath: 'packages/api/RELEASE.md',
+        releaseNotesHash: hashContent(packageNotes),
         manifestPath: '.release-please-manifest.json',
         fileHashes: {
           'packages/api/CHANGELOG.md': hashContent(packageChangelog),
-          'packages/api/RELEASE.md': hashContent(packageNotes),
           '.release-please-manifest.json': hashContent(
             '{\n  "packages/api": "1.3.0"\n}\n',
           ),
@@ -401,12 +476,10 @@ describe('PublishManager', () => {
     );
     api.changedFiles = [
       'packages/api/CHANGELOG.md',
-      'packages/api/RELEASE.md',
       '.release-please-manifest.json',
     ];
     api.files = new Map([
       [`${mergeSha}:packages/api/CHANGELOG.md`, packageChangelog],
-      [`${mergeSha}:packages/api/RELEASE.md`, packageNotes],
       [
         `${mergeSha}:.release-please-manifest.json`,
         '{\n  "packages/api": "1.3.0"\n}\n',
