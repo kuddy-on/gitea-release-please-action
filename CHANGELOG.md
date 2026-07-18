@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.5](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.4...v2.0.5) (2026-07-18)
+
+
+### Bug Fixes
+
+* exclude legacy changelog preambles from release notes ([#16](https://github.com/kuddy-on/gitea-release-please-action/issues/16)) ([50aead5](https://github.com/kuddy-on/gitea-release-please-action/commit/50aead58a0552f85a0a214f41fa8e3dfc811cd67))
+
 ## [2.0.4](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.3...v2.0.4) (2026-07-18)
 
 
