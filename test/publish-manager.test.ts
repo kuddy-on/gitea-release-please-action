@@ -73,6 +73,7 @@ function releaseBody(
   tagName = 'v1.3.0',
   version = '1.3.0',
   manifestContent = `{\n  ".": "${version}"\n}\n`,
+  changelogContent = changelog,
 ): string {
   return buildPullRequestBody(
     {
@@ -85,7 +86,7 @@ function releaseBody(
       releaseNotesHash: hashContent(releaseNotes),
       manifestPath: '.release-please-manifest.json',
       fileHashes: {
-        'CHANGELOG.md': hashContent(changelog),
+        'CHANGELOG.md': hashContent(changelogContent),
         '.release-please-manifest.json': hashContent(manifestContent),
       },
     },
@@ -253,6 +254,28 @@ describe('PublishManager', () => {
       'autorelease: tagged',
     );
     expect(api.branchExists).toBe(false);
+  });
+
+  it('publishes when a legacy insertion marker precedes the next changelog version', async () => {
+    const api = new FakePublishApi();
+    const legacyChangelog =
+      `${changelog.trimEnd()}\n\n` +
+      '<!-- insertion marker -->\n' +
+      '<a name="1.2.0"></a>\n' +
+      '## [1.2.0](https://gitea.example/acme/demo/releases/tag/v1.2.0)\n\n' +
+      '* previous release\n';
+    api.files.set(`${mergeSha}:CHANGELOG.md`, legacyChangelog);
+    api.pullRequest.body = releaseBody(
+      'v1.3.0',
+      '1.3.0',
+      manifest,
+      legacyChangelog,
+    );
+
+    const result = await publish(api);
+
+    expect(result.body).toBe(releaseNotes);
+    expect(api.releases[0]?.body).toBe(releaseNotes);
   });
 
   it('publishes a legacy schema 2 release PR from its release notes file', async () => {

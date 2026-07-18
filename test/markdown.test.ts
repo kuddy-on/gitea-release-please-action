@@ -100,6 +100,47 @@ describe('release markdown', () => {
     expect(extractReleaseNotesFromChangelog(changelog, '9.9.9')).toBeNull();
   });
 
+  it('excludes legacy insertion markers and version anchors from release notes', () => {
+    const generated = generateReleaseMarkdown({
+      version: '6.0.0',
+      tagName: 'v6.0.0',
+      previousTag: 'v5.0.1',
+      date: '2026-07-18',
+      webUrl: 'https://gitea.example',
+      owner: 'acme',
+      repo: 'demo',
+      changelogSections: [{ type: 'feat', section: 'Features' }],
+      includeCommitAuthors: false,
+      existingChangelog:
+        '# Changelog\n\n' +
+        '<!-- insertion marker -->\n' +
+        '<a name="5.0.1"></a>\n' +
+        '## [5.0.1](https://gitea.example/acme/demo/releases/tag/v5.0.1)\n\n' +
+        '* previous release\n',
+      changes: [
+        {
+          sha: '1234567890',
+          url: 'https://gitea.example/acme/demo/commit/1234567890',
+          type: 'feat',
+          scope: null,
+          subject: 'new feature',
+          breaking: false,
+          breakingNotes: [],
+        },
+      ],
+    });
+
+    expect(extractReleaseNotesFromChangelog(generated.changelog, '6.0.0')).toBe(
+      generated.releaseNotes,
+    );
+    expect(
+      extractReleaseNotesFromChangelog(
+        generated.changelog.replace('<!-- insertion marker -->\n', ''),
+        '6.0.0',
+      ),
+    ).toBe(generated.releaseNotes);
+  });
+
   it('normalizes issue references after titles and before authors and commits', () => {
     const generated = generateReleaseMarkdown({
       version: '1.2.1',
