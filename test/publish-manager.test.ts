@@ -351,6 +351,18 @@ describe('PublishManager', () => {
     expect(await new PublishManager(api, config, logger).run()).toBeNull();
   });
 
+  it('publishes from the merge commit when Gitea already deleted the release branch', async () => {
+    const api = new FakePublishApi();
+    api.pullRequest.head.ref = 'refs/pull/7/head';
+    api.branchExists = false;
+
+    const result = await publish(api);
+    expect(result.releaseCreated).toBe(true);
+    expect(api.tags).toEqual([{ name: 'v1.3.0', commit: { sha: mergeSha } }]);
+    expect(api.releases).toHaveLength(1);
+    expect(api.branchExists).toBe(false);
+  });
+
   it('repairs a missing release without recreating the matching tag', async () => {
     const api = new FakePublishApi();
     api.tags.push({ name: 'v1.3.0', commit: { sha: mergeSha } });
@@ -360,6 +372,18 @@ describe('PublishManager', () => {
     expect(result.releaseCreated).toBe(true);
     expect(api.tags).toHaveLength(1);
     expect(api.releases).toHaveLength(1);
+  });
+
+  it('rejects an archived pull ref belonging to a different pull request', async () => {
+    const api = new FakePublishApi();
+    api.pullRequest.head.ref = 'refs/pull/8/head';
+    api.branchExists = false;
+
+    await expect(publish(api)).rejects.toThrow(
+      'does not use managed release branch release-please--branches--main',
+    );
+    expect(api.tags).toHaveLength(0);
+    expect(api.releases).toHaveLength(0);
   });
 
   it('ignores ordinary and unmerged pull requests', async () => {
