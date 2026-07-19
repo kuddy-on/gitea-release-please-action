@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.6](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.5...v2.0.6) (2026-07-19)
+
+
+### Bug Fixes
+
+* publish after release branch deletion ([0969577](https://github.com/kuddy-on/gitea-release-please-action/commit/0969577aab54003ef0149278b77c972c79e7f865))
+
 ## [2.0.5](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.4...v2.0.5) (2026-07-18)
 
 
