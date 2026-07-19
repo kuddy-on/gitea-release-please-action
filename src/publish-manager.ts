@@ -87,13 +87,13 @@ export class PublishManager {
     }
     if (pullRequest.head.ref !== expectedBranch) {
       const archivedHead = `refs/pull/${pullRequest.number}/head`;
-      if (pullRequest.head.ref !== archivedHead || !existingTag) {
+      if (pullRequest.head.ref !== archivedHead) {
         throw new Error(
           `PR #${pullRequest.number} does not use managed release branch ${expectedBranch}; found ${pullRequest.head.ref || '<deleted>'}.`,
         );
       }
       this.logger.info(
-        `Release PR #${pullRequest.number} source branch was already deleted; repairing or verifying its Release from the existing tag.`,
+        `Release PR #${pullRequest.number} source branch was already deleted; publishing from its verified merge commit.`,
       );
     }
 

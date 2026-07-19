@@ -92,7 +92,7 @@ standalone `RELEASE.md` file. During publication it extracts the pending version
 `CHANGELOG.md`; with `skip-changelog: true`, it uses the hash-checked notes section embedded in
 the Release PR body instead.
 
-The machine branch is `release-please--branches--main`, and the default PR title is `chore(main): release 1.2.3`. While it remains open, every new push to `main` rebuilds that branch from the latest `main`, updates the same PR, and recalculates the highest bump. The branch must allow force updates and must not be edited manually. Squash, merge, rebase, and rebase-merge are all supported when the Release PR is merged.
+The machine branch is `release-please--branches--main`, and the default PR title is `chore(main): release 1.2.3`. While it remains open, every new push to `main` rebuilds that branch from the latest `main`, updates the same PR, and recalculates the highest bump. The branch must allow force updates and must not be edited manually. Squash, merge, rebase, and rebase-merge are all supported when the Release PR is merged. Gitea's **Delete branch after merge** option is also supported; publication uses the verified merge commit when Gitea has already archived the PR head ref.
 
 `Release-As: 2.0.0` in a commit footer forces a version. A merged PR body may replace a single commit's parsed message with:
 

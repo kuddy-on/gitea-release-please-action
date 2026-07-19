@@ -190,7 +190,7 @@ merge_pull_request_in_repo() {
     status="$(curl -sS -o "${output}" -w '%{http_code}' -X POST \
       -H "${AUTH_HEADER}" \
       -H 'Content-Type: application/json' \
-      -d "{\"Do\":\"${method}\",\"MergeTitleField\":\"${title}\",\"MergeMessageField\":\"\"}" \
+      -d "{\"Do\":\"${method}\",\"MergeTitleField\":\"${title}\",\"MergeMessageField\":\"\",\"delete_branch_after_merge\":true}" \
       "${ROOT_URL}/api/v1/repos/${repository}/pulls/${number}/merge")"
     if test "${status}" = '200'; then
       return 0
@@ -260,6 +260,11 @@ merge_pull_request 1 squash "${FIRST_TITLE}" "${WORK_DIR}/merge.json"
 merge_sha="$(curl -fsS -H "${AUTH_HEADER}" \
   "${ROOT_URL}/api/v1/repos/e2e/demo/pulls/1" | jq -r '.merge_commit_sha')"
 test -n "${merge_sha}"
+first_merged_pull="$(curl -fsS -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/demo/pulls/1")"
+test "$(jq -r '.head.ref' <<<"${first_merged_pull}")" = 'refs/pull/1/head'
+test "$(curl -sS -o /dev/null -w '%{http_code}' -H "${AUTH_HEADER}" \
+  "${ROOT_URL}/api/v1/repos/e2e/demo/branches/release-please--branches--main")" = '404'
 
 run_action
 test "$(output_value "${WORK_DIR}/action-output" release_created)" = 'true'
