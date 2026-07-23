@@ -15,6 +15,8 @@ const INPUT_NAMES = [
   'INPUT_INCLUDE-V-IN-TAG',
   'INPUT_EXTRA-FILES',
   'INPUT_EXCLUDE-PATHS',
+  'INPUT_COMMIT-SEARCH-DEPTH',
+  'INPUT_RELEASE-SEARCH-DEPTH',
   'INPUT_SKIP-GITHUB-RELEASE',
   'INPUT_SKIP-GITHUB-PULL-REQUEST',
 ];
@@ -34,6 +36,8 @@ describe('action configuration', () => {
     delete process.env['INPUT_INCLUDE-V-IN-TAG'];
     delete process.env['INPUT_EXTRA-FILES'];
     delete process.env['INPUT_EXCLUDE-PATHS'];
+    delete process.env['INPUT_COMMIT-SEARCH-DEPTH'];
+    delete process.env['INPUT_RELEASE-SEARCH-DEPTH'];
     delete process.env['INPUT_SKIP-GITHUB-RELEASE'];
     delete process.env['INPUT_SKIP-GITHUB-PULL-REQUEST'];
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -56,6 +60,8 @@ describe('action configuration', () => {
       manifestFile: '.release-please-manifest.json',
       labels: ['autorelease: pending'],
       releaseLabels: ['autorelease: tagged'],
+      commitSearchDepth: 500,
+      releaseSearchDepth: 400,
     });
   });
 
@@ -105,6 +111,18 @@ describe('action configuration', () => {
     expect(loadConfig().excludePaths).toEqual(['docs', 'examples']);
   });
 
+  it('supports Google-compatible bounded history search depths', () => {
+    process.env['INPUT_COMMIT-SEARCH-DEPTH'] = '750';
+    process.env['INPUT_RELEASE-SEARCH-DEPTH'] = '600';
+    expect(loadConfig()).toMatchObject({
+      commitSearchDepth: 750,
+      releaseSearchDepth: 600,
+    });
+
+    process.env['INPUT_COMMIT-SEARCH-DEPTH'] = '0';
+    expect(() => loadConfig()).toThrow('commit-search-depth must be a positive integer');
+  });
+
   it('rejects extra files that conflict with generated release files', () => {
     process.env['INPUT_EXTRA-FILES'] = JSON.stringify([
       '.release-please-manifest.json',
@@ -143,6 +161,8 @@ describe('action configuration', () => {
               { type: 'json', path: 'package.json', jsonpath: '$.version' },
             ],
             'exclude-paths': ['docs'],
+            'commit-search-depth': 800,
+            'release-search-depth': 650,
           },
         },
       }),
@@ -154,6 +174,8 @@ describe('action configuration', () => {
       pullRequestHeader: 'Custom header',
       extraFiles: [{ type: 'json', path: 'package.json', jsonpath: '$.version' }],
       excludePaths: ['docs'],
+      commitSearchDepth: 800,
+      releaseSearchDepth: 650,
     });
   });
 

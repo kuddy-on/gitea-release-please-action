@@ -37,6 +37,8 @@ const config: ActionConfig = {
   changelogHost: 'https://gitea.example',
   extraFiles: [],
   excludePaths: [],
+  commitSearchDepth: 500,
+  releaseSearchDepth: 400,
   versioningStrategy: 'default',
   bumpMinorPreMajor: false,
   bumpPatchForMinorPreMajor: false,
@@ -120,8 +122,11 @@ function managedPullRequest(): PullRequest {
 
 class FakePublishApi implements PublishApi {
   pullRequest = managedPullRequest();
+  historicalPullRequests: PullRequest[] = [];
   tags: RepositoryTag[] = [];
   releases: RepositoryRelease[] = [];
+  tagLookups: string[] = [];
+  releaseLookups: string[] = [];
   labels: RepositoryLabel[] = [
     { id: 1, name: 'autorelease: pending', color: 'fbca04' },
     { id: 2, name: 'autorelease: tagged', color: '0e8a16' },
@@ -151,6 +156,7 @@ class FakePublishApi implements PublishApi {
   }
 
   async getTag(tagName: string) {
+    this.tagLookups.push(tagName);
     return this.tags.find((tag) => tag.name === tagName) ?? null;
   }
 
@@ -161,6 +167,7 @@ class FakePublishApi implements PublishApi {
   }
 
   async getReleaseByTag(tagName: string) {
+    this.releaseLookups.push(tagName);
     return this.releases.find((release) => release.tag_name === tagName) ?? null;
   }
 
@@ -180,7 +187,9 @@ class FakePublishApi implements PublishApi {
   }
 
   async listPullRequests(state: 'open' | 'closed') {
-    return state === 'closed' ? [this.pullRequest] : [];
+    return state === 'closed'
+      ? [this.pullRequest, ...this.historicalPullRequests]
+      : [];
   }
 
   async listPullRequestFiles() {
@@ -349,6 +358,32 @@ describe('PublishManager', () => {
     expect(api.tags).toHaveLength(1);
     expect(api.releases).toHaveLength(1);
     expect(await new PublishManager(api, config, logger).run()).toBeNull();
+  });
+
+  it('checks only the latest tagged release instead of walking all history', async () => {
+    const api = new FakePublishApi();
+    api.pullRequest.labels = [
+      { id: 2, name: 'autorelease: tagged', color: '0e8a16' },
+    ];
+    api.tags.push({ name: 'v1.3.0', commit: { sha: mergeSha } });
+    api.releases.push({
+      id: 1,
+      tag_name: 'v1.3.0',
+      name: 'v1.3.0',
+      body: releaseNotes,
+      html_url: 'https://gitea.example/acme/demo/releases/tag/v1.3.0',
+    });
+    api.historicalPullRequests.push({
+      ...managedPullRequest(),
+      number: 6,
+      merged_at: '2026-07-13T01:00:00Z',
+      body: releaseBody('v1.2.0', '1.2.0', '{".":"1.2.0"}\n'),
+      labels: [{ id: 2, name: 'autorelease: tagged', color: '0e8a16' }],
+    });
+
+    await expect(new PublishManager(api, config, logger).run()).resolves.toBeNull();
+    expect(api.tagLookups).toEqual(['v1.3.0']);
+    expect(api.releaseLookups).toEqual(['v1.3.0']);
   });
 
   it('publishes from the merge commit when Gitea already deleted the release branch', async () => {

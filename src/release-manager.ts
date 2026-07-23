@@ -36,6 +36,7 @@ export type ReleaseApi = Pick<
   | 'getBranch'
   | 'getContent'
   | 'getRepository'
+  | 'getTag'
   | 'getTextContent'
   | 'listCommits'
   | 'listLabels'
@@ -44,6 +45,8 @@ export type ReleaseApi = Pick<
   | 'listTags'
   | 'updatePullRequestBranch'
 >;
+
+const MERGED_PULL_REQUEST_SEARCH_DEPTH = 200;
 
 interface CommitScan {
   commits: RepositoryCommit[];
@@ -189,6 +192,7 @@ export class ReleaseManager {
     const scan = await this.scanCommits(targetBranch, previousVersion);
     const commits = await this.applyCommitOverrides(
       scan.commits.filter((commit) => this.includeCommit(commit)),
+      targetBranch,
     );
     const changes = parseChanges(commits, this.config.changelogSections);
     if (changes.length === 0) {
@@ -272,8 +276,13 @@ export class ReleaseManager {
 
   private async applyCommitOverrides(
     commits: RepositoryCommit[],
+    targetBranch: string,
   ): Promise<RepositoryCommit[]> {
-    const closedPullRequests = await this.client.listPullRequests('closed');
+    const closedPullRequests = await this.client.listPullRequests('closed', {
+      base: targetBranch,
+      maxResults: MERGED_PULL_REQUEST_SEARCH_DEPTH,
+      merged: true,
+    });
     const overrides = new Map<string, string>();
     for (const pullRequest of closedPullRequests) {
       if (!pullRequest.merged || !pullRequest.merge_commit_sha) continue;
@@ -308,48 +317,49 @@ export class ReleaseManager {
   private async findUntaggedMergedRelease(
     targetBranch: string,
   ): Promise<PullRequest | undefined> {
-    const [closedPullRequests, tags] = await Promise.all([
-      this.client.listPullRequests('closed'),
-      this.client.listTags(),
-    ]);
-    const tagNames = new Set(tags.map((tag) => tag.name));
-    return closedPullRequests.find((pullRequest) => {
+    const closedPullRequests = await this.client.listPullRequests('closed', {
+      base: targetBranch,
+      maxResults: MERGED_PULL_REQUEST_SEARCH_DEPTH,
+      merged: true,
+    });
+    const candidates = closedPullRequests.filter((pullRequest) => {
       if (!pullRequest.merged) return false;
       const marker = parseMarker(pullRequest.body ?? '');
-      if (!marker || marker.targetBranch !== targetBranch || tagNames.has(marker.tagName)) {
-        return false;
-      }
+      if (!marker || marker.targetBranch !== targetBranch) return false;
       if ((marker.path ?? ROOT_PROJECT_PATH) !== this.config.path) return false;
       if (this.config.skipLabeling) return true;
       const names = new Set((pullRequest.labels ?? []).map((label) => label.name));
       return this.config.labels.every((label) => names.has(label));
     });
+    for (const pullRequest of candidates) {
+      const marker = parseMarker(pullRequest.body ?? '');
+      if (marker && !(await this.client.getTag(marker.tagName))) return pullRequest;
+    }
+    return undefined;
   }
 
   private async scanCommits(
     targetBranch: string,
     previousVersion: string | null,
   ): Promise<CommitScan> {
-    const [commits, tags] = await Promise.all([
-      this.client.listCommits(
-        targetBranch,
-        this.config.path !== ROOT_PROJECT_PATH || this.config.excludePaths.length > 0,
-      ),
-      this.client.listTags(),
-    ]);
-    const targetHead = commits[0];
-    if (!targetHead) throw new Error(`Target branch ${targetBranch} has no commits.`);
-
-    const releaseTags = tags.filter(
-      (tag) => versionFromTag(tag.name, this.config.tagPrefix) !== null,
-    );
     const expectedTagName =
       previousVersion === null
         ? null
         : `${this.config.tagPrefix}${previousVersion}`;
     const expectedTag = expectedTagName
-      ? releaseTags.find((tag) => tag.name === expectedTagName)
-      : undefined;
+      ? await this.client.getTag(expectedTagName)
+      : null;
+    let releaseTags: RepositoryTag[] = [];
+    if (
+      previousVersion === null ||
+      (previousVersion === '0.0.0' && !expectedTag)
+    ) {
+      releaseTags = (
+        await this.client.listTags(this.config.releaseSearchDepth)
+      ).filter(
+        (tag) => versionFromTag(tag.name, this.config.tagPrefix) !== null,
+      );
+    }
     if (previousVersion === null && releaseTags.length > 0) {
       throw new Error(
         `${this.config.manifestFile} has no ${this.config.path} entry, but release tags already exist. Initialize the manifest with the latest released version.`,
@@ -365,9 +375,20 @@ export class ReleaseManager {
       );
     }
 
-    const selectedCommits: RepositoryCommit[] = [];
     const boundarySha =
       expectedTag?.commit.sha ?? this.config.lastReleaseSha ?? this.config.bootstrapSha;
+    const commits = await this.client.listCommits(
+      targetBranch,
+      this.config.path !== ROOT_PROJECT_PATH || this.config.excludePaths.length > 0,
+      {
+        maxResults: this.config.commitSearchDepth,
+        ...(boundarySha ? { stopSha: boundarySha } : {}),
+      },
+    );
+    const targetHead = commits[0];
+    if (!targetHead) throw new Error(`Target branch ${targetBranch} has no commits.`);
+
+    const selectedCommits: RepositoryCommit[] = [];
     let foundBoundary = !boundarySha;
 
     for (const commit of commits) {
@@ -381,8 +402,8 @@ export class ReleaseManager {
     if (!foundBoundary) {
       throw new Error(
         expectedTag
-          ? `Manifest release tag ${expectedTag.name} is not reachable from ${targetBranch}.`
-          : `commit boundary ${boundarySha} was not found on ${targetBranch}.`,
+          ? `Manifest release tag ${expectedTag.name} is not reachable from ${targetBranch} within commit-search-depth ${this.config.commitSearchDepth}.`
+          : `commit boundary ${boundarySha} was not found within commit-search-depth ${this.config.commitSearchDepth} on ${targetBranch}.`,
       );
     }
 
@@ -402,7 +423,9 @@ export class ReleaseManager {
   ): Promise<void> {
     const branch = releaseBranchName(targetBranch);
     const repository = this.head.fullName;
-    const pullRequests = await this.client.listPullRequests('open');
+    const pullRequests = await this.client.listPullRequests('open', {
+      base: targetBranch,
+    });
     const releasePullRequests = pullRequests.filter((pullRequest) => {
       const marker = parseMarker(pullRequest.body ?? '');
       return marker?.targetBranch === targetBranch;

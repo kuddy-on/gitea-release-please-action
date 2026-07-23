@@ -74,6 +74,14 @@ inputs:
   exclude-paths:
     description: JSON array of repository paths whose commits are excluded when all changed files match.
     required: false
+  commit-search-depth:
+    description: Maximum number of recent target-branch commits scanned while locating the previous release.
+    required: false
+    default: '500'
+  release-search-depth:
+    description: Maximum number of recent tags scanned when bootstrapping without an expected release tag.
+    required: false
+    default: '400'
   bootstrap-sha:
     description: Exclusive commit boundary used before the first matching tag.
     required: false
