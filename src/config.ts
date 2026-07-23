@@ -191,6 +191,20 @@ function validateSha(name: string, value: unknown): string | undefined {
   return value;
 }
 
+function positiveInteger(name: string, value: unknown, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 function parseLabels(name: string, value: unknown, fallback: string[]): string[] {
   if (value === undefined) return [...fallback];
   if (typeof value !== 'string') throw new Error(`${name} must be a comma-separated string.`);
@@ -351,6 +365,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ActionConfig {
     changelogHost: optionalInput('changelog-host') ?? normalizeUrls(serverUrl).webUrl,
     extraFiles: parseExtraFiles(optionalInput('extra-files')),
     excludePaths: parsePaths('exclude-paths', optionalInput('exclude-paths'), []),
+    commitSearchDepth: positiveInteger(
+      'commit-search-depth',
+      optionalInput('commit-search-depth'),
+      500,
+    ),
+    releaseSearchDepth: positiveInteger(
+      'release-search-depth',
+      optionalInput('release-search-depth'),
+      400,
+    ),
     versioningStrategy: validateVersioning(
       optionalInput('versioning-strategy') ?? 'default',
     ),
@@ -536,6 +560,16 @@ export function applyRepositoryConfig(
         ? base.extraFiles
         : parseExtraFiles(JSON.stringify(raw['extra-files'])),
     excludePaths: parsePaths('exclude-paths', raw['exclude-paths'], base.excludePaths),
+    commitSearchDepth: positiveInteger(
+      'commit-search-depth',
+      raw['commit-search-depth'],
+      base.commitSearchDepth,
+    ),
+    releaseSearchDepth: positiveInteger(
+      'release-search-depth',
+      raw['release-search-depth'],
+      base.releaseSearchDepth,
+    ),
     versioningStrategy: validateVersioning(
       raw.versioning ?? base.versioningStrategy,
     ),

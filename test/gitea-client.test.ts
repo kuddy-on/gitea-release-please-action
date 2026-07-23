@@ -87,6 +87,73 @@ describe('GiteaClient', () => {
     expect(secondUrl.searchParams.get('limit')).toBe('50');
   });
 
+  it('stops commit pagination as soon as the release boundary is found', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => ({
+      sha: `commit-${index}`,
+      html_url: `https://gitea.example/acme/demo/commit/${index}`,
+      commit: { message: `fix: commit ${index}` },
+      parents: [],
+    }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(firstPage))
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+    );
+
+    const commits = await client.listCommits('main', true, {
+      stopSha: 'commit-23',
+      maxResults: 500,
+    });
+
+    expect(commits).toHaveLength(24);
+    expect(commits.at(-1)?.sha).toBe('commit-23');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = fetchMock.mock.calls[0]?.[0] as URL;
+    expect(url.searchParams.get('files')).toBe('true');
+  });
+
+  it('bounds pagination and filters pull requests by base branch', async () => {
+    const page = Array.from({ length: 50 }, (_, index) => ({
+      number: index + 1,
+      base: { ref: index === 0 ? 'develop' : 'main' },
+      merged: index !== 1,
+    }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(page))
+      .mockResolvedValueOnce(jsonResponse(page));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GiteaClient(
+      'https://gitea.example/api/v1',
+      'secret',
+      'acme',
+      'demo',
+    );
+
+    const pullRequests = await client.listPullRequests('closed', {
+      base: 'main',
+      maxResults: 60,
+      merged: true,
+    });
+
+    expect(pullRequests).toHaveLength(60);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstUrl = fetchMock.mock.calls[0]?.[0] as URL;
+    expect(firstUrl.searchParams.get('base')).toBe('main');
+    expect(firstUrl.searchParams.get('page')).toBe('1');
+    const secondUrl = fetchMock.mock.calls[1]?.[0] as URL;
+    expect(secondUrl.searchParams.get('page')).toBe('2');
+    expect(pullRequests.every((pullRequest) => (
+      pullRequest.base.ref === 'main' && pullRequest.merged
+    ))).toBe(true);
+  });
+
   it('returns null for allowed 404 file and release lookups', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 404 }));
     vi.stubGlobal('fetch', fetchMock);

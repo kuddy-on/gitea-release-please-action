@@ -18,6 +18,8 @@ export interface ActionConfig {
   changelogHost: string;
   extraFiles: ExtraFile[];
   excludePaths: string[];
+  commitSearchDepth: number;
+  releaseSearchDepth: number;
   bootstrapSha?: string;
   lastReleaseSha?: string;
   releaseAs?: string;

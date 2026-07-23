@@ -38,6 +38,8 @@ const config: ActionConfig = {
   changelogHost: 'https://gitea.example',
   extraFiles: [],
   excludePaths: [],
+  commitSearchDepth: 500,
+  releaseSearchDepth: 400,
   versioningStrategy: 'default',
   bumpMinorPreMajor: false,
   bumpPatchForMinorPreMajor: false,
@@ -116,18 +118,36 @@ class FakeApi implements ReleaseApi {
   pullRequestHeadFullName = 'acme/demo';
   updatedBranches: Array<{ branch: string; newCommitId: string; oldCommitId?: string }> = [];
   updatedPullRequestBranches: number[] = [];
+  lastListCommitsCall: Parameters<ReleaseApi['listCommits']> | null = null;
+  lastListTagsLimit: number | undefined;
   private changeCounter = 0;
 
   async getRepository() {
     return { default_branch: 'main', html_url: 'https://gitea.example/acme/demo' };
   }
 
-  async listCommits() {
-    return this.commits;
+  async listCommits(...args: Parameters<ReleaseApi['listCommits']>) {
+    this.lastListCommitsCall = args;
+    const options = args[2];
+    const boundaryIndex = options?.stopSha
+      ? this.commits.findIndex((candidate) =>
+          candidate.sha.startsWith(options.stopSha ?? ''))
+      : -1;
+    const commits = boundaryIndex >= 0
+      ? this.commits.slice(0, boundaryIndex + 1)
+      : this.commits;
+    return options?.maxResults === undefined
+      ? commits
+      : commits.slice(0, options.maxResults);
   }
 
-  async listTags() {
-    return this.tags;
+  async listTags(maxResults?: number) {
+    this.lastListTagsLimit = maxResults;
+    return maxResults === undefined ? this.tags : this.tags.slice(0, maxResults);
+  }
+
+  async getTag(tagName: string) {
+    return this.tags.find((tag) => tag.name === tagName) ?? null;
   }
 
   async listPullRequests(state: 'open' | 'closed') {
@@ -675,6 +695,15 @@ describe('ReleaseManager', () => {
 
     await manager(api).run();
     expect(api.pullRequests[0]?.title).toBe('chore(main): release 0.2.0');
+    expect(api.lastListCommitsCall).toEqual([
+      'main',
+      false,
+      {
+        maxResults: 500,
+        stopSha: '1111111111111111',
+      },
+    ]);
+    expect(api.lastListTagsLimit).toBeUndefined();
   });
 
   it('creates release pull requests without a tag prefix', async () => {

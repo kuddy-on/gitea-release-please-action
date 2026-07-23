@@ -20,6 +20,23 @@ interface RequestOptions {
   allowNotFound?: boolean;
 }
 
+interface ListOptions<T> {
+  accept?: (item: T) => boolean;
+  maxResults?: number;
+  stopWhen?: (item: T) => boolean;
+}
+
+export interface ListCommitsOptions {
+  maxResults?: number;
+  stopSha?: string;
+}
+
+export interface ListPullRequestsOptions {
+  base?: string;
+  maxResults?: number;
+  merged?: boolean;
+}
+
 interface ChangeFilesOptions {
   branch: string;
   newBranch?: string;
@@ -156,14 +173,21 @@ export class GiteaClient {
   private async listAll<T>(
     path: string,
     query: Record<string, boolean | number | string | undefined> = {},
+    options: ListOptions<T> = {},
   ): Promise<T[]> {
     const all: T[] = [];
+    const maxResults = options.maxResults ?? Number.MAX_SAFE_INTEGER;
+    if (maxResults <= 0) return all;
     for (let page = 1; page <= 1_000; page += 1) {
       const items =
         (await this.request<T[]>('GET', path, {
           query: { ...query, page, limit: PAGE_SIZE },
         })) ?? [];
-      all.push(...items);
+      for (const item of items) {
+        if (options.accept && !options.accept(item)) continue;
+        all.push(item);
+        if (options.stopWhen?.(item) || all.length >= maxResults) return all;
+      }
       if (items.length < PAGE_SIZE) return all;
     }
     throw new Error(`Gitea API pagination exceeded 1000 pages for ${path}.`);
@@ -195,13 +219,31 @@ export class GiteaClient {
     return repository;
   }
 
-  async listCommits(branch: string, includeFiles = false): Promise<RepositoryCommit[]> {
-    return this.listAll<RepositoryCommit>(`${this.repositoryPath}/commits`, {
-      sha: branch,
-      stat: false,
-      verification: false,
-      files: includeFiles,
-    });
+  async listCommits(
+    branch: string,
+    includeFiles = false,
+    options: ListCommitsOptions = {},
+  ): Promise<RepositoryCommit[]> {
+    return this.listAll<RepositoryCommit>(
+      `${this.repositoryPath}/commits`,
+      {
+        sha: branch,
+        stat: false,
+        verification: false,
+        files: includeFiles,
+      },
+      {
+        ...(options.maxResults === undefined
+          ? {}
+          : { maxResults: options.maxResults }),
+        ...(options.stopSha === undefined
+          ? {}
+          : {
+              stopWhen: (commit: RepositoryCommit) =>
+                commit.sha.startsWith(options.stopSha ?? ''),
+            }),
+      },
+    );
   }
 
   async getBranch(branch: string): Promise<RepositoryBranch | null> {
@@ -248,8 +290,12 @@ export class GiteaClient {
     );
   }
 
-  async listTags(): Promise<RepositoryTag[]> {
-    return this.listAll<RepositoryTag>(`${this.repositoryPath}/tags`);
+  async listTags(maxResults?: number): Promise<RepositoryTag[]> {
+    return this.listAll<RepositoryTag>(
+      `${this.repositoryPath}/tags`,
+      {},
+      maxResults === undefined ? {} : { maxResults },
+    );
   }
 
   async getTag(tagName: string): Promise<RepositoryTag | null> {
@@ -268,11 +314,34 @@ export class GiteaClient {
     return tag;
   }
 
-  async listPullRequests(state: 'open' | 'closed'): Promise<PullRequest[]> {
-    return this.listAll<PullRequest>(`${this.repositoryPath}/pulls`, {
-      state,
-      sort: 'recentupdate',
-    });
+  async listPullRequests(
+    state: 'open' | 'closed',
+    options: ListPullRequestsOptions = {},
+  ): Promise<PullRequest[]> {
+    return this.listAll<PullRequest>(
+      `${this.repositoryPath}/pulls`,
+      {
+        state,
+        sort: 'recentupdate',
+        ...(options.base === undefined ? {} : { base: options.base }),
+      },
+      {
+        ...(
+          options.base === undefined && options.merged === undefined
+            ? {}
+            : {
+                accept: (pullRequest: PullRequest) =>
+                  (options.base === undefined ||
+                    pullRequest.base.ref === options.base) &&
+                  (options.merged === undefined ||
+                    pullRequest.merged === options.merged),
+              }
+        ),
+        ...(options.maxResults === undefined
+          ? {}
+          : { maxResults: options.maxResults }),
+      },
+    );
   }
 
   async getPullRequest(number: number): Promise<PullRequest> {

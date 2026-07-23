@@ -30,6 +30,8 @@ interface ManagedRelease {
   marker: NonNullable<ReturnType<typeof parseMarker>>;
 }
 
+const MERGED_PULL_REQUEST_SEARCH_DEPTH = 200;
+
 export class PublishManager {
   private readonly lifecycle: LifecycleLabels;
 
@@ -217,7 +219,11 @@ export class PublishManager {
   private async findPendingRelease(): Promise<ManagedRelease | null> {
     const targetBranch = this.config.targetBranch;
     if (!targetBranch) throw new Error('Internal error: target branch was not resolved.');
-    const pullRequests = await this.client.listPullRequests('closed');
+    const pullRequests = await this.client.listPullRequests('closed', {
+      base: targetBranch,
+      maxResults: MERGED_PULL_REQUEST_SEARCH_DEPTH,
+      merged: true,
+    });
     const candidates = pullRequests
       .filter((pullRequest) => pullRequest.merged && pullRequest.base.ref === targetBranch)
       .sort((left, right) => (right.merged_at ?? '').localeCompare(left.merged_at ?? ''))
@@ -239,20 +245,32 @@ export class PublishManager {
         return [{ pullRequest, marker }];
       });
 
-    for (const candidate of candidates) {
-      const release = await this.client.getReleaseByTag(candidate.marker.tagName);
-      const tag = await this.client.getTag(candidate.marker.tagName);
+    const pendingCandidate = candidates.find((candidate) => {
       const names = new Set(
         (candidate.pullRequest.labels ?? []).map((label) => label.name),
       );
-      const pending = this.config.labels.every((label) => names.has(label));
-      if (!tag || !release || (!this.config.skipLabeling && pending)) return candidate;
+      return this.config.skipLabeling ||
+        this.config.labels.every((label) => names.has(label));
+    });
+    if (pendingCandidate) return pendingCandidate;
+
+    const latestTagged = candidates[0];
+    if (latestTagged) {
+      const [release, tag] = await Promise.all([
+        this.client.getReleaseByTag(latestTagged.marker.tagName),
+        this.client.getTag(latestTagged.marker.tagName),
+      ]);
+      if (!tag || !release) return latestTagged;
     }
     return null;
   }
 
   private async cleanupBranch(branch: string): Promise<void> {
-    const openPullRequests = await this.client.listPullRequests('open');
+    const targetBranch = this.config.targetBranch;
+    if (!targetBranch) throw new Error('Internal error: target branch was not resolved.');
+    const openPullRequests = await this.client.listPullRequests('open', {
+      base: targetBranch,
+    });
     if (openPullRequests.some((pullRequest) => pullRequest.head.ref === branch)) return;
     if (!(await this.head.client.getBranch(branch))) return;
     this.logger.info(`Deleting merged release branch ${branch}.`);

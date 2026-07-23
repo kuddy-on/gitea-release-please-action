@@ -155,7 +155,13 @@ The matching manifest is:
 }
 ```
 
-Important options include `release-as`, `bootstrap-sha`, `last-release-sha`, `versioning`, `bump-minor-pre-major`, `bump-patch-for-minor-pre-major`, `prerelease`, `prerelease-type`, `draft`, `draft-pull-request`, `skip-changelog`, `exclude-paths`, `changelog-sections`, `include-commit-authors`, PR title/header/footer, lifecycle labels, release-name prefix, date format, and signoff. See [`action.yml`](action.yml) for direct action inputs.
+Important options include `release-as`, `bootstrap-sha`, `last-release-sha`, `commit-search-depth`, `release-search-depth`, `versioning`, `bump-minor-pre-major`, `bump-patch-for-minor-pre-major`, `prerelease`, `prerelease-type`, `draft`, `draft-pull-request`, `skip-changelog`, `exclude-paths`, `changelog-sections`, `include-commit-authors`, PR title/header/footer, lifecycle labels, release-name prefix, date format, and signoff. See [`action.yml`](action.yml) for direct action inputs.
+
+History queries follow Google Release Please's bounded, incremental model. Commit pages stop
+as soon as the previous release SHA is found instead of downloading the complete branch
+history. The defaults scan at most 500 recent commits and 400 recent tags; increase
+`commit-search-depth` or `release-search-depth` only when an older release boundary must be
+recovered.
 
 Set `tag-prefix: ''` or `include-v-in-tag: false` for tags such as `1.2.3`. Gitea's create-PR API has no draft field, so `draft-pull-request` uses its `WIP:` title convention.
 
