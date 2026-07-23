@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.7](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.6...v2.0.7) (2026-07-23)
+
+
+### Performance Improvements
+
+* bound release history queries ([#20](https://github.com/kuddy-on/gitea-release-please-action/issues/20)) ([8e941c6](https://github.com/kuddy-on/gitea-release-please-action/commit/8e941c69169800e0c610140e22dd4e75786741e2))
+
 ## [2.0.6](https://github.com/kuddy-on/gitea-release-please-action/compare/v2.0.5...v2.0.6) (2026-07-19)
 
 
